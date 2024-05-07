@@ -53,25 +53,20 @@ def filter_data(people, organizations, locations, miscellaneous, logic_type):
         if not selected_items:
             return None
         if logic_type == 'AND':
-            # All selected items must match the record
             return data[column].apply(lambda x: all(item in split_and_clean(x) for item in selected_items) if pd.notna(x) else False)
         else:
-            # Any selected items may match the record
             return data[column].apply(lambda x: any(item in split_and_clean(x) for item in selected_items) if pd.notna(x) else False)
 
-    # Build conditions for each category
     people_condition = build_condition(people, 'a_per')
     organizations_condition = build_condition(organizations, 'a_org')
     locations_condition = build_condition(locations, 'a_loc')
     miscellaneous_condition = build_condition(miscellaneous, 'a_misc')
     
-    # Collect all valid conditions
     valid_conditions = [cond for cond in [people_condition, organizations_condition, locations_condition, miscellaneous_condition] if cond is not None]
     
     if not valid_conditions:
         return data
     
-    # Apply logical AND or OR across all valid conditions
     if logic_type == 'AND':
         return data[np.logical_and.reduce(valid_conditions)]
     else:
@@ -84,7 +79,6 @@ filtered_data = filter_data(selected_people, selected_organizations, selected_lo
 def display_top_entities(filtered_data):
     col1, col2, col3, col4 = st.columns(4)
 
-    # Combine all criteria into a single string
     all_criteria = []
     if selected_locations:
         all_criteria.append(", ".join(selected_locations))
@@ -96,7 +90,6 @@ def display_top_entities(filtered_data):
         all_criteria.append(", ".join(selected_miscellaneous))
     combined_criteria = ", ".join(all_criteria)
 
-    # Use the combined criteria for all category titles
     category_title = f"Data associated with '{combined_criteria}'" if all_criteria else "Data associated with selected criteria"
 
     with col1:
