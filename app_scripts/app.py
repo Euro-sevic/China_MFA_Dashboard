@@ -29,6 +29,56 @@ def split_and_clean(text):
         t.strip() for t in text.split(";") if t.strip() and t.strip().lower() != "nan"
     ]
 
+
+def calculate_stats(term, category):
+    normalized_term = term.lower().strip()
+
+    normalized_data = data[category].dropna().str.lower().str.strip().str.replace(r'[^\w\s]', '', regex=True).str.split(';')
+    
+    term_counts = normalized_data.explode().str.strip().value_counts()
+    
+    term_count = term_counts.get(normalized_term, 0)
+    total_count = normalized_data.explode().count()
+    frequency = (term_count / total_count) * 100 if total_count > 0 else 0
+
+    if normalized_term in term_counts:
+        rank = term_counts.index.tolist().index(normalized_term) + 1
+    else:
+        rank = None  
+
+    return frequency, rank
+
+
+def display_basic_stats():
+    for category, terms in zip(['a_per', 'a_loc', 'a_org', 'a_misc'], [selected_people, selected_locations, selected_organizations, selected_miscellaneous]):
+        for term in terms:
+            frequency, rank = calculate_stats(term, category)
+            if rank is not None:
+                st.write(f'"{term}" appears in {frequency:.2f}% of all entries and is the {rank}th most common value in the {category}.')
+            else:
+                st.write(f'"{term}" appears in {frequency:.2f}% of all entries but is not found among the common values in the {category}.')
+
+
+def plot_frequency_over_time(term, category):
+    yearly_data = data[data[category].str.contains(term, regex=False, na=False)]
+    yearly_counts = yearly_data.groupby(yearly_data['year']).size()
+    total_counts = data.groupby('year').size()
+    
+    yearly_frequencies = (yearly_counts / total_counts) * 100
+    
+    fig = px.bar(yearly_frequencies, labels={'value': '% of Entries', 'year': 'Year'},
+                 title=f'Frequency of "{term}" Over Time in {category}')
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def interactive_frequency_details():
+    expander = st.expander("View Detailed Frequency Trends", expanded=False)
+    with expander:
+        for category, terms in zip(['a_per', 'a_loc', 'a_org', 'a_misc'], [selected_people, selected_locations, selected_organizations, selected_miscellaneous]):
+            for term in terms:
+                plot_frequency_over_time(term, category)
+
+
 unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
 unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
 unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
@@ -73,7 +123,6 @@ def filter_data(people, organizations, locations, miscellaneous, logic_type):
         return data[np.logical_or.reduce(valid_conditions)]
 
 
-
 filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
 
 def display_top_entities(filtered_data):
@@ -90,7 +139,7 @@ def display_top_entities(filtered_data):
         all_criteria.append(", ".join(selected_miscellaneous))
     combined_criteria = ", ".join(all_criteria)
 
-    category_title = f"Data associated with '{combined_criteria}'" if all_criteria else "Data associated with selected criteria"
+    category_title = f"associated with '{combined_criteria}'" if all_criteria else "associated with selected criteria"
 
     with col1:
         st.subheader(f"Locations {category_title}")
@@ -148,7 +197,7 @@ def plot_combined_timeline(filtered_data, overall_data):
     )
 
     fig.update_layout(
-        title_text="How Often and How Positively Does China's MFA Talk About This?",
+        title_text="Sentiment and Entry Counts Over Time",
         xaxis_title="Year",
         yaxis_title="Counts",
         yaxis2_title="Average Sentiment",
@@ -161,29 +210,34 @@ def plot_combined_timeline(filtered_data, overall_data):
 
     st.plotly_chart(fig, use_container_width=False)
 
+display_basic_stats()
+interactive_frequency_details()
 
-expander = st.expander("View Detailed Associations", expanded=True) 
+expander = st.expander("What & Who does China's MFA associate most commonly with your query?", expanded=True) 
 with expander:
     display_top_entities(filtered_data)
 
-plot_combined_timeline(filtered_data, data)
+expander_plot = st.expander("How Often and How Positively Does China's MFA Talk About This?", expanded=False)
+with expander_plot:
+    plot_combined_timeline(filtered_data, data)
+
+def display_qa_pairs(year_data):
+    st.write("Question and Answer Pairs with Sentiment Score", year_data[['question', 'answer', 'a_sentiment']])
 
 years = filtered_data["year"].unique()
-if len(years) > 1:  
+if len(years) > 1:
     selected_year = st.select_slider("Select a Year:", options=sorted(years))
     year_data = filtered_data[filtered_data["year"] == selected_year]
     if not year_data.empty:
-        st.subheader(f"Question and Answer Pairs for {selected_year}")
-        st.write(year_data[["question", "answer"]])
+        display_qa_pairs(year_data)
     else:
         st.error("No question-answer pairs to display for the selected year.")
-elif len(years) == 1: 
+elif len(years) == 1:
     selected_year = years[0]
     year_data = filtered_data[filtered_data["year"] == selected_year]
     st.info(f"Only data from the year {selected_year} is available based on your selections.")
     if not year_data.empty:
-        st.subheader(f"Question and Answer Pairs for {selected_year}")
-        st.write(year_data[["question", "answer"]])
+        display_qa_pairs(year_data)
     else:
         st.error("No question-answer pairs to display.")
 else:
