@@ -4,13 +4,6 @@ import plotly.express as px
 import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("What does the official China say about...?")
-st.markdown(
-    """
-This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
-"""
-)
-
 
 @st.cache_data
 def load_data():
@@ -23,6 +16,12 @@ def load_data():
 
 data = load_data()
 
+@st.cache_data
+def load_precomputed_stats():
+    stats_df = pd.read_pickle("../data/precomputed_stats.pkl")
+    return stats_df
+
+precomputed_stats = load_precomputed_stats()
 
 def split_and_clean(text):
     return [
@@ -30,33 +29,27 @@ def split_and_clean(text):
     ]
 
 
-def calculate_stats(term, category):
-    normalized_term = term.lower().strip()
-
-    normalized_data = data[category].dropna().str.lower().str.strip().str.replace(r'[^\w\s]', '', regex=True).str.split(';')
-    
-    term_counts = normalized_data.explode().str.strip().value_counts()
-    
-    term_count = term_counts.get(normalized_term, 0)
-    total_count = normalized_data.explode().count()
-    frequency = (term_count / total_count) * 100 if total_count > 0 else 0
-
-    if normalized_term in term_counts:
-        rank = term_counts.index.tolist().index(normalized_term) + 1
-    else:
-        rank = None  
-
-    return frequency, rank
-
-
 def display_basic_stats():
-    for category, terms in zip(['a_per', 'a_loc', 'a_org', 'a_misc'], [selected_people, selected_locations, selected_organizations, selected_miscellaneous]):
+    for category, terms in zip(
+        ["a_per", "a_loc", "a_org", "a_misc"],
+        [
+            selected_people,
+            selected_locations,
+            selected_organizations,
+            selected_miscellaneous,
+        ],
+    ):
         for term in terms:
-            frequency, rank = calculate_stats(term, category)
-            if rank is not None:
-                st.write(f'"{term}" appears in {frequency:.2f}% of all entries and is the {rank}th most common value in the {category}.')
+            processed_term = term.lower()  # Convert term to lowercase to match dictionary keys
+            category_stats = precomputed_stats.get(category, {})  # Safely get the category dictionary
+            term_stats = category_stats.get(processed_term)  # Safely get the stats for the term
+
+            if term_stats:
+                rank = term_stats['rank']  # Access the rank
+                with st.expander(f"🌟 {term.capitalize()} is the {rank}th most common value in {category}. 🌟"):
+                    plot_frequency_over_time(term, category)
             else:
-                st.write(f'"{term}" appears in {frequency:.2f}% of all entries but is not found among the common values in the {category}.')
+                st.error(f"Stats not found for '{term}' (processed as '{processed_term}')")
 
 
 def plot_frequency_over_time(term, category):
@@ -69,6 +62,7 @@ def plot_frequency_over_time(term, category):
     fig = px.bar(yearly_frequencies, labels={'value': '% of Entries', 'year': 'Year'},
                  title=f'Frequency of "{term}" Over Time in {category}')
     st.plotly_chart(fig, use_container_width=True)
+
 
 
 def interactive_frequency_details():
@@ -84,7 +78,15 @@ unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().app
 unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
 unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
 
-with st.expander("Select Search Criteria", expanded=True):
+with st.sidebar:
+    st.title("What does the official China say about...?")
+    st.markdown(
+        """
+    This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
+    """
+    )
+
+    st.title("Select Search Criteria")
     selected_locations = st.multiselect("Select Locations:", unique_locations, key='select_locations')
     selected_organizations = st.multiselect("Select Organizations:", unique_organizations, key='select_organizations')
     selected_people = st.multiselect("Select People:", unique_people, key='select_people')
@@ -211,7 +213,6 @@ def plot_combined_timeline(filtered_data, overall_data):
     st.plotly_chart(fig, use_container_width=False)
 
 display_basic_stats()
-interactive_frequency_details()
 
 expander = st.expander("What & Who does China's MFA associate most commonly with your query?", expanded=True) 
 with expander:
@@ -242,4 +243,3 @@ elif len(years) == 1:
         st.error("No question-answer pairs to display.")
 else:
     st.error("No data available for the selected criteria.")
-
