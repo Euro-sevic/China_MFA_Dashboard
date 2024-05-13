@@ -2,24 +2,32 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import numpy as np
+import os
 
 st.set_page_config(layout="wide")
 
+
+
 @st.cache_data
 def load_data():
-    df = pd.read_excel("../data/CMFA_PressCon_v4.xlsx")
+    base_path = os.path.dirname(__file__)
+    file_path = os.path.join(base_path, '..', 'data', 'CMFA_PressCon_v4.xlsx')
+    df = pd.read_excel(file_path)
     columns_to_clean = ["a_per", "a_loc", "a_org", "a_misc"]
     for column in columns_to_clean:
         df[column] = df[column].replace("-", np.nan).astype(str)
     return df
 
-
 data = load_data()
 
 @st.cache_data
 def load_precomputed_stats():
-    stats_df = pd.read_pickle("../data/precomputed_stats.pkl")
+    base_path = os.path.dirname(__file__)
+    file_path = os.path.join(base_path, '..', 'data', 'precomputed_stats.pkl')
+    stats_df = pd.read_pickle(file_path)
     return stats_df
+
+precomputed_stats = load_precomputed_stats()
 
 precomputed_stats = load_precomputed_stats()
 
