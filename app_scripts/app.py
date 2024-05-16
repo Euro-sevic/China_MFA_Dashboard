@@ -31,35 +31,30 @@ precomputed_stats = load_precomputed_stats()
 
 # Functions to load TF-IDF components
 @st.cache_data
-def load_tfidf_data():
+def load_tfidf_data(tfidf_label):
+    """
+    Load the TF-IDF data from the specified pickle file based on user-selected max_df setting.
+    """
     base_path = os.path.dirname(__file__)
-    file_path = os.path.join(base_path, '..', 'data', 'yearly_tfidf_full.pkl')
+    # Correct the filename based on the slider input, which now corresponds to the file suffix.
+    file_path = os.path.join(base_path, '..', 'data', f'yearly_tfidf_maxdf{tfidf_label}.pkl')
     with open(file_path, 'rb') as file:
         tfidf_data = pickle.load(file)
     return tfidf_data
 
 def extract_relevant_tfidf(tfidf_data, filtered_data):
-    # Group data by year and concatenate 'answer_lem' entries
     yearly_documents = filtered_data.groupby('year')['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
-
-    # Prepare a DataFrame to store TF-IDF scores
     tfidf_scores = {year: {} for year in tfidf_data.keys()}
-
     for year, document in yearly_documents.items():
         if year in tfidf_data:
             matrix, feature_names = tfidf_data[year]
             feature_names_list = list(feature_names)
-            document_terms = document.split()  # Split concatenated document into terms
+            document_terms = document.split()
             term_indices = [feature_names_list.index(term) for term in document_terms if term in feature_names_list]
-
             if term_indices:
-                # Extract the relevant columns from the matrix for the given terms
                 relevant_matrix = matrix[:, term_indices]
-                # Sum the rows (documents) to combine into a single score per term
                 summed_scores = np.array(relevant_matrix.sum(axis=0)).flatten()
                 tfidf_scores[year] = dict(zip([feature_names_list[i] for i in term_indices], summed_scores))
-
-    # Transform into a DataFrame for easier handling in Streamlit
     return pd.DataFrame(tfidf_scores)
 
 def split_and_clean(text):
@@ -303,5 +298,25 @@ else:
 
 expander_tfidf = st.expander("Discover Influential Terms in MFA's Responses", expanded=False)
 with expander_tfidf:
+    # Use a select slider that outputs the numeric suffix directly
+    tfidf_setting = st.select_slider(
+        "Choose TF-IDF setting:",
+        options=[50, 35, 20],  # These options directly correspond to the suffix in your file names
+        format_func=lambda x: f"max_df={x/100:.2f}"  # Format display as decimal percentages
+    )
+    tfidf_data = load_tfidf_data(tfidf_setting)
     if st.button('Analyze Influential Terms'):
-        display_tfidf_scores()
+        filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
+        tfidf_df = extract_relevant_tfidf(tfidf_data, filtered_data)
+        if not tfidf_df.empty:
+            formatted_df = pd.DataFrame()
+            for year in tfidf_df.columns:
+                top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
+                if not top_terms.empty:
+                    max_score = top_terms.iloc[0]
+                    formatted_terms = [f"{term} ({(score/max_score * 100):.2f}%)" for term, score in top_terms.items()]
+                    formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+            formatted_df = formatted_df.dropna(how='all', axis=1)
+            st.dataframe(formatted_df)
+        else:
+            st.write("No relevant TF-IDF scores found for the selected query.")
