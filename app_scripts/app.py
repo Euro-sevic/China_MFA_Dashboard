@@ -118,6 +118,12 @@ with st.sidebar:
     # Load the dataset based on user selection
     dataset = 'full' if dataset_choice == 'Full Dataset' else 'ukraine'
     data = load_data(dataset)
+
+    # Extract unique values for the filters after loading the data
+    unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
+    unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
+    unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
+    unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
     
     st.markdown(
         """
