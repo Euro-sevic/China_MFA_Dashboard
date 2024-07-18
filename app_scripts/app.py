@@ -114,6 +114,10 @@ with st.sidebar:
         ('Full Dataset', 'Ukraine-only Dataset'),
         index=0
     )
+
+    # Load the dataset based on user selection
+    dataset = 'full' if dataset_choice == 'Full Dataset' else 'ukraine'
+    data = load_data(dataset)
     
     st.markdown(
         """
@@ -132,9 +136,6 @@ with st.sidebar:
         help="Choose 'AND' to display entries that meet all criteria or 'OR' for entries that meet any of the selected criteria."
     )
 
-# Adjust this part to load the dataset based on user selection
-dataset = 'full' if dataset_choice == 'Full Dataset' else 'ukraine'
-data = load_data(dataset)
 
 def filter_data(people, organizations, locations, miscellaneous, logic_type):
     conditions = []
