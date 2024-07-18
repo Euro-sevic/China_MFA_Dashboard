@@ -124,7 +124,7 @@ with st.sidebar:
     unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
     unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
     unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
-    
+
     st.markdown(
         """
     This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
