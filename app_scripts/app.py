@@ -9,19 +9,16 @@ import pickle
 st.set_page_config(layout="wide")
 
 @st.cache_data
-def load_data(dataset='full'):
+def load_data():
     base_path = os.path.dirname(__file__)
-    if dataset == 'full':
-        file_path = os.path.join(base_path, '..', 'data', 'CMFA_PressCon_v4.xlsx')
-    else:
-        file_path = os.path.join(base_path, '..', 'data', 'ukraine_dataset_combined.xlsx')
-        
+    file_path = os.path.join(base_path, '..', 'data', 'CMFA_PressCon_v4.xlsx')
     df = pd.read_excel(file_path)
     columns_to_clean = ["a_per", "a_loc", "a_org", "a_misc"]
     for column in columns_to_clean:
         df[column] = df[column].replace("-", np.nan).astype(str)
     return df
 
+data = load_data()
 
 @st.cache_data
 def load_precomputed_stats():
@@ -108,23 +105,6 @@ unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().ap
 
 with st.sidebar:
     st.title("What does the official China say about...?")
-    
-    dataset_choice = st.radio(
-        "Choose Dataset:",
-        ('Full Dataset', 'Ukraine-only Dataset'),
-        index=0
-    )
-
-    # Load the dataset based on user selection
-    dataset = 'full' if dataset_choice == 'Full Dataset' else 'ukraine'
-    data = load_data(dataset)
-
-    # Extract unique values for the filters after loading the data
-    unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
-    unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
-    unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
-    unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
-
     st.markdown(
         """
     This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
