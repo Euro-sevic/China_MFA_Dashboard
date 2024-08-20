@@ -42,9 +42,11 @@ def load_tfidf_data(tfidf_label):
         tfidf_data = pickle.load(file)
     return tfidf_data
 
-def extract_relevant_tfidf(tfidf_data, filtered_data):
+def extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment):
     yearly_documents = filtered_data.groupby('year')['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
     tfidf_scores = {year: {} for year in tfidf_data.keys()}
+    sentiment_scores = {year: {} for year in tfidf_data.keys()}  # Store average sentiment for each term
+
     for year, document in yearly_documents.items():
         if year in tfidf_data:
             matrix, feature_names = tfidf_data[year]
@@ -55,7 +57,14 @@ def extract_relevant_tfidf(tfidf_data, filtered_data):
                 relevant_matrix = matrix[:, term_indices]
                 summed_scores = np.array(relevant_matrix.sum(axis=0)).flatten()
                 tfidf_scores[year] = dict(zip([feature_names_list[i] for i in term_indices], summed_scores))
-    return pd.DataFrame(tfidf_scores)
+                
+                # Calculate average sentiment for each term
+                for term_index in term_indices:
+                    term = feature_names_list[term_index]
+                    term_data = filtered_data[filtered_data['answer_lem'].str.contains(term, regex=False, na=False)]
+                    sentiment_scores[year][term] = term_data['a_sentiment'].mean()
+
+    return pd.DataFrame(tfidf_scores), sentiment_scores
 
 def split_and_clean(text):
     return [
@@ -107,7 +116,7 @@ with st.sidebar:
     st.title("What does the official China say about...?")
     st.markdown(
         """
-    This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
+    Good evening. This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
     """
     )
 
@@ -152,25 +161,36 @@ def filter_data(people, organizations, locations, miscellaneous, logic_type):
 
 filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
 
-def display_tfidf_scores():
-    tfidf_data = load_tfidf_data()
-    tfidf_df = extract_relevant_tfidf(tfidf_data, filtered_data)
+def display_tfidf_scores(filtered_data, overall_data):
+    tfidf_data = load_tfidf_data(tfidf_label)
     
-    if not tfidf_df.empty:
+    # Compute overall sentiment
+    overall_sentiment = overall_data.groupby('year')['a_sentiment'].mean().to_dict()
+    
+    tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
+    
+    if not tfidf_df.empty():
         formatted_df = pd.DataFrame()
 
         for year in tfidf_df.columns:
             top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
-            if not top_terms.empty:
+            if not top_terms.empty():
                 max_score = top_terms.iloc[0]  # Get the maximum score to normalize
-                formatted_terms = [f"{term} ({(score/max_score * 100):.2f}%)"
-                                   for term, score in top_terms.items()]
+                overall_avg_sentiment = overall_sentiment[year]
+
+                formatted_terms = []
+                for term, score in top_terms.items():
+                    term_avg_sentiment = sentiment_scores[year].get(term, overall_avg_sentiment)  # Default to overall avg if not found
+                    color = 'green' if term_avg_sentiment > overall_avg_sentiment else 'red'
+                    formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
+                    formatted_terms.append(formatted_term)
+
                 formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
 
         formatted_df = formatted_df.dropna(how='all', axis=1)
 
-        if not formatted_df.empty:
-            st.dataframe(formatted_df)
+        if not formatted_df.empty():
+            st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
         else:
             st.write("All years resulted in empty data after processing.")
     else:
@@ -298,25 +318,54 @@ else:
 
 expander_tfidf = st.expander("Discover Influential Terms in MFA's Responses", expanded=False)
 with expander_tfidf:
-    # Use a select slider that outputs the numeric suffix directly
     tfidf_setting = st.select_slider(
         "Choose TF-IDF setting:",
         options=[50, 35, 20],  # These options directly correspond to the suffix in your file names
         format_func=lambda x: f"max_df={x/100:.2f}"  # Format display as decimal percentages
     )
     tfidf_data = load_tfidf_data(tfidf_setting)
-    if st.button('Analyze Influential Terms'):
+
+    if st.button('Analyze Influential Terms', help=(
+        "This button identifies the most significant terms in the Chinese Ministry of Foreign Affairs' "
+        "responses for the selected criteria. These terms are not just frequent; they are unusually common "
+        "in the selected responses compared to all other responses from China in that year. "
+        "This ranking is done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), "
+        "which highlights terms that are especially relevant in the context of your query. "
+        "\n\nThe color coding indicates the sentiment associated with each term:\n"
+        "- **Green**: The term's sentiment is more positive than the overall average sentiment of all answers "
+        "given by China that year.\n"
+        "- **Red**: The term's sentiment is less positive than the overall average sentiment of all answers "
+        "given by China that year."
+    )):
         filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
-        tfidf_df = extract_relevant_tfidf(tfidf_data, filtered_data)
+
+        # Compute overall sentiment and pass it to the relevant functions
+        overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()  # Use `data` here
+        tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
+
         if not tfidf_df.empty:
             formatted_df = pd.DataFrame()
+
             for year in tfidf_df.columns:
                 top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
                 if not top_terms.empty:
                     max_score = top_terms.iloc[0]
-                    formatted_terms = [f"{term} ({(score/max_score * 100):.2f}%)" for term, score in top_terms.items()]
+                    overall_avg_sentiment = overall_sentiment[year]
+
+                    formatted_terms = []
+                    for term, score in top_terms.items():
+                        term_avg_sentiment = sentiment_scores[year].get(term, overall_avg_sentiment)  # Default to overall avg if not found
+                        color = 'green' if term_avg_sentiment > overall_avg_sentiment else 'red'
+                        formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
+                        formatted_terms.append(formatted_term)
+
                     formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+
             formatted_df = formatted_df.dropna(how='all', axis=1)
-            st.dataframe(formatted_df)
+
+            if not formatted_df.empty:
+                st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
+            else:
+                st.write("No relevant TF-IDF scores found for the selected query.")
         else:
             st.write("No relevant TF-IDF scores found for the selected query.")
