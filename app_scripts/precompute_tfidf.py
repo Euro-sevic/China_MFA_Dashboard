@@ -60,7 +60,7 @@ def main():
     if 'year' not in data.columns:
         raise ValueError("Year column missing after preprocessing. Check preprocessing steps.")
 
-    for max_df_value in [0.5, 0.35, 0.2]:
+    for max_df_value in [0.5, 0.35, 0.2, 0.1, 0.05]:
         yearly_tfidf_scores = compute_yearly_tfidf(data, max_df_value)
         save_yearly_tfidf(yearly_tfidf_scores, max_df_value)
 

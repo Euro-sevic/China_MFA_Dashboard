@@ -113,10 +113,13 @@ unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(s
 unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
 
 with st.sidebar:
+    st.image("https://www.aies.at/img/layout/AIES-Logo-EN-white.png?m=1684934843", use_column_width=True)
     st.title("What does the official China say about...?")
     st.markdown(
         """
-    Good evening. This interactive dashboard allows you to explore a corpus of the Chinese Ministry of Foreign Affairs press conferences. The dataset is a unique source of information for 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
+    This AIES interactive dashboard lets you explore a corpus of the press conferences by the Chinese Ministry of Foreign Affairs. The dataset is a unique source of information covering 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
+    
+    A big thank you to Richard Turcsányi for his input! Data source: https://doi.org/10.1007/s11366-022-09836-w
     """
     )
 
@@ -161,6 +164,27 @@ def filter_data(people, organizations, locations, miscellaneous, logic_type):
 
 filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
 
+
+def assign_colors_dynamically(sentiment_scores, overall_sentiment):
+    # Convert sentiment scores to a list and remove any NaN values
+    sentiments = np.array(list(sentiment_scores.values()))
+    sentiments = sentiments[~np.isnan(sentiments)]
+
+    # Calculate the 25th, 50th (median), and 75th percentiles
+    q25, q50, q75 = np.percentile(sentiments, [25, 50, 75])
+
+    # Assign colors based on where the term's sentiment score falls
+    colors = {}
+    for term, score in sentiment_scores.items():
+        if score < q25:
+            colors[term] = 'red'
+        elif score > q75:
+            colors[term] = 'green'
+        else:
+            colors[term] = 'white'
+    
+    return colors
+
 def display_tfidf_scores(filtered_data, overall_data):
     tfidf_data = load_tfidf_data(tfidf_label)
     
@@ -175,13 +199,15 @@ def display_tfidf_scores(filtered_data, overall_data):
         for year in tfidf_df.columns:
             top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
             if not top_terms.empty():
-                max_score = top_terms.iloc[0]  # Get the maximum score to normalize
-                overall_avg_sentiment = overall_sentiment[year]
+                max_score = top_terms.iloc[0]
+                year_sentiment_scores = sentiment_scores[year]
+
+                # Dynamically assign colors
+                colors = assign_colors_dynamically(year_sentiment_scores, overall_sentiment[year])
 
                 formatted_terms = []
                 for term, score in top_terms.items():
-                    term_avg_sentiment = sentiment_scores[year].get(term, overall_avg_sentiment)  # Default to overall avg if not found
-                    color = 'green' if term_avg_sentiment > overall_avg_sentiment else 'red'
+                    color = colors.get(term, 'white')  # Default to white if not found
                     formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
                     formatted_terms.append(formatted_term)
 
@@ -271,12 +297,18 @@ def plot_combined_timeline(filtered_data, overall_data):
     )
 
     fig.update_layout(
-        title_text="Sentiment and Entry Counts Over Time",
         xaxis_title="Year",
         yaxis_title="Counts",
         yaxis2_title="Average Sentiment",
         width=1200,
         height=600,
+        legend=dict(
+            orientation="h",  # Horizontal orientation
+            yanchor="top",  # Anchor the legend at the top
+            y=-0.2,  # Position it slightly below the plot
+            xanchor="center",  # Center the legend horizontally
+            x=0.5  # Position it at the center of the plot
+        )
     )
 
     fig.update_yaxes(title_text="Entry Count", secondary_y=False)
@@ -284,15 +316,138 @@ def plot_combined_timeline(filtered_data, overall_data):
 
     st.plotly_chart(fig, use_container_width=False)
 
-display_basic_stats()
+# CSS for button styling
+st.markdown(
+    """
+    <style>
+    div.stButton > button:first-child {
+        background-color: #023059; /* Dark Blue */
+        color: white;
+        font-weight: bold;
+        font-size: 18px;
+        height: 3em;
+        width: 100%;
+        border-radius: 10px;
+        border: 2px solid #023059;
+        box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+    }
+    div.stButton > button:first-child:hover {
+        background-color: #F29A2E; /* Orange */
+        color: white;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-expander = st.expander("What & Who does China's MFA associate most commonly with your query?", expanded=True) 
-with expander:
-    display_top_entities(filtered_data)
-
-expander_plot = st.expander("How Often and How Positively Does China's MFA Talk About This?", expanded=False)
-with expander_plot:
+if st.button("📊 View Timeline of Mentions and Sentiment Over Time"):
     plot_combined_timeline(filtered_data, data)
+
+import os
+
+# Hard-coded options for the slider with labels as percentages
+available_max_df_values = [50, 35, 20, 10, 5]  # These are the only valid options
+
+# Convert the integer values to display as percentages
+formatted_options = [f"{value}%" for value in available_max_df_values]
+
+# Check if the button has been clicked
+if "button_clicked" not in st.session_state:
+    st.session_state.button_clicked = False
+
+# Button to uncover key terms
+if st.button("🔍 Uncover Key Terms in China's MFA Statements"):
+    st.session_state.button_clicked = True  # Set the state to indicate the button was clicked
+
+# Only run the analysis if the button has been clicked
+if st.session_state.button_clicked:
+    # Initial analysis with a default setting if it hasn't been set yet
+    if "tfidf_setting" not in st.session_state:
+        st.session_state.tfidf_setting = available_max_df_values[2]  # Default to 20%
+
+    # Show the slider with more intuitive labeling
+    tfidf_choice = st.select_slider(
+        "Select the threshold for including common terms (higher percentage = more terms included):",
+        options=formatted_options,
+        value=f"{st.session_state.tfidf_setting}%"  # Display the session state value as a percentage
+    )
+
+    # Update the session state to store the selected integer value
+    st.session_state.tfidf_setting = int(tfidf_choice.rstrip('%'))
+
+    # Perform the analysis based on the current tfidf_setting
+    tfidf_data = load_tfidf_data(st.session_state.tfidf_setting)
+
+    # Filter the data based on user selections
+    filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
+
+    # Compute overall sentiment and extract relevant TF-IDF scores
+    overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()
+    tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
+
+    # Display the results
+    if not tfidf_df.empty:
+        formatted_df = pd.DataFrame()
+
+        for year in tfidf_df.columns:
+            top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
+            if not top_terms.empty:
+                max_score = top_terms.iloc[0]
+                year_sentiment_scores = sentiment_scores[year]
+
+                # Dynamically assign colors based on sentiment distribution
+                colors = assign_colors_dynamically(year_sentiment_scores, overall_sentiment[year])
+
+                formatted_terms = []
+                for term, score in top_terms.items():
+                    color = colors.get(term, 'white')  # Default to white if not found
+                    formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
+                    formatted_terms.append(formatted_term)
+
+                formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+
+        formatted_df = formatted_df.dropna(how='all', axis=1)
+
+        if not formatted_df.empty:
+            st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
+            
+            # Display the help text below the DataFrame
+            st.markdown(
+                """
+                #### Explanation of the Key Term Results above:
+                
+                This section identifies the most significant terms in the Chinese Ministry of Foreign Affairs' 
+                responses for the selected criteria. These terms are not just frequent; they are unusually common 
+                in the selected responses compared to all other responses from China in that year. This ranking is 
+                done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), which highlights 
+                terms that are especially relevant in the context of your query.
+
+                **Color Coding**:
+                
+                - **Green**: Sentiment is in the top 25th percentile (more positive than the overall average).
+                - **Red**: Sentiment is in the bottom 25th percentile (less positive than the overall average).
+                - **Neutral (White)**: Sentiment falls within the middle 50th percentile, close to the overall average.
+                """
+            )
+        else:
+            st.write("No relevant terms found for the selected query.")
+    else:
+        st.write("No relevant terms found for the selected query.")
+
+# CSS for adding spacing between elements
+st.markdown(
+    """
+    <style>
+    .spacer {
+        margin-top: 60px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# Add a spacer between buttons and the next section
+st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
 def display_qa_pairs(year_data):
     st.write("Question and Answer Pairs with Sentiment Score", year_data[['question', 'answer', 'a_sentiment']])
@@ -316,56 +471,11 @@ elif len(years) == 1:
 else:
     st.error("No data available for the selected criteria.")
 
-expander_tfidf = st.expander("Discover Influential Terms in MFA's Responses", expanded=False)
-with expander_tfidf:
-    tfidf_setting = st.select_slider(
-        "Choose TF-IDF setting:",
-        options=[50, 35, 20],  # These options directly correspond to the suffix in your file names
-        format_func=lambda x: f"max_df={x/100:.2f}"  # Format display as decimal percentages
-    )
-    tfidf_data = load_tfidf_data(tfidf_setting)
+def display_qa_pairs(year_data):
+    st.write("Question and Answer Pairs with Sentiment Score", year_data[['question', 'answer', 'a_sentiment']])
 
-    if st.button('Analyze Influential Terms', help=(
-        "This button identifies the most significant terms in the Chinese Ministry of Foreign Affairs' "
-        "responses for the selected criteria. These terms are not just frequent; they are unusually common "
-        "in the selected responses compared to all other responses from China in that year. "
-        "This ranking is done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), "
-        "which highlights terms that are especially relevant in the context of your query. "
-        "\n\nThe color coding indicates the sentiment associated with each term:\n"
-        "- **Green**: The term's sentiment is more positive than the overall average sentiment of all answers "
-        "given by China that year.\n"
-        "- **Red**: The term's sentiment is less positive than the overall average sentiment of all answers "
-        "given by China that year."
-    )):
-        filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
+display_basic_stats()
 
-        # Compute overall sentiment and pass it to the relevant functions
-        overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()  # Use `data` here
-        tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
-
-        if not tfidf_df.empty:
-            formatted_df = pd.DataFrame()
-
-            for year in tfidf_df.columns:
-                top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
-                if not top_terms.empty:
-                    max_score = top_terms.iloc[0]
-                    overall_avg_sentiment = overall_sentiment[year]
-
-                    formatted_terms = []
-                    for term, score in top_terms.items():
-                        term_avg_sentiment = sentiment_scores[year].get(term, overall_avg_sentiment)  # Default to overall avg if not found
-                        color = 'green' if term_avg_sentiment > overall_avg_sentiment else 'red'
-                        formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
-                        formatted_terms.append(formatted_term)
-
-                    formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
-
-            formatted_df = formatted_df.dropna(how='all', axis=1)
-
-            if not formatted_df.empty:
-                st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
-            else:
-                st.write("No relevant TF-IDF scores found for the selected query.")
-        else:
-            st.write("No relevant TF-IDF scores found for the selected query.")
+expander = st.expander("What & Who does China's MFA associate most commonly with your query?", expanded=False) 
+with expander:
+    display_top_entities(filtered_data)
