@@ -5,6 +5,7 @@ import numpy as np
 import os
 from scipy.sparse import load_npz
 import pickle
+import time
 
 st.set_page_config(layout="wide")
 
@@ -12,10 +13,23 @@ st.set_page_config(layout="wide")
 def load_data():
     base_path = os.path.dirname(__file__)
     file_path = os.path.join(base_path, '..', 'data', 'CMFA_PressCon_v4.xlsx')
-    df = pd.read_excel(file_path)
+    
+    # Specify only the columns you need
+    columns_to_load = [
+        "id", "day", "month", "year", "date", "question", "answer",
+        "question_lem", "answer_lem", "q_loc", "q_per", "q_org", 
+        "q_misc", "a_loc", "a_per", "a_org", "a_misc", 
+        "a_sentiment", "q_sentiment"
+    ]
+    
+    # Load only the necessary columns
+    df = pd.read_excel(file_path, usecols=columns_to_load)
+    
+    # Clean specific columns
     columns_to_clean = ["a_per", "a_loc", "a_org", "a_misc"]
     for column in columns_to_clean:
         df[column] = df[column].replace("-", np.nan).astype(str)
+    
     return df
 
 data = load_data()
@@ -35,21 +49,29 @@ def load_tfidf_data(tfidf_label):
     """
     Load the TF-IDF data from the specified pickle file based on user-selected max_df setting.
     """
+    print(f"Loading TF-IDF data for max_df={tfidf_label}...")
+    start_time = time.time()
+    
     base_path = os.path.dirname(__file__)
     # Correct the filename based on the slider input, which now corresponds to the file suffix.
     file_path = os.path.join(base_path, '..', 'data', f'yearly_tfidf_maxdf{tfidf_label}.pkl')
     with open(file_path, 'rb') as file:
-        tfidf_data = pickle.load(file)
-    return tfidf_data
+        _tfidf_data = pickle.load(file)
+    print(f"TF-IDF data loaded in {time.time() - start_time} seconds")
+    return _tfidf_data
 
-def extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment):
+
+def extract_relevant_tfidf(_tfidf_data, filtered_data):
+    print("Extracting relevant TF-IDF scores...")
+    start_time = time.time()
+
     yearly_documents = filtered_data.groupby('year')['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
-    tfidf_scores = {year: {} for year in tfidf_data.keys()}
-    sentiment_scores = {year: {} for year in tfidf_data.keys()}  # Store average sentiment for each term
+    tfidf_scores = {year: {} for year in _tfidf_data.keys()}
+    sentiment_scores = {year: {} for year in _tfidf_data.keys()}  # Store average sentiment for each term
 
     for year, document in yearly_documents.items():
-        if year in tfidf_data:
-            matrix, feature_names = tfidf_data[year]
+        if year in _tfidf_data:
+            matrix, feature_names, precomputed_sentiments = _tfidf_data[year]
             feature_names_list = list(feature_names)
             document_terms = document.split()
             term_indices = [feature_names_list.index(term) for term in document_terms if term in feature_names_list]
@@ -58,12 +80,10 @@ def extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment):
                 summed_scores = np.array(relevant_matrix.sum(axis=0)).flatten()
                 tfidf_scores[year] = dict(zip([feature_names_list[i] for i in term_indices], summed_scores))
                 
-                # Calculate average sentiment for each term
-                for term_index in term_indices:
-                    term = feature_names_list[term_index]
-                    term_data = filtered_data[filtered_data['answer_lem'].str.contains(term, regex=False, na=False)]
-                    sentiment_scores[year][term] = term_data['a_sentiment'].mean()
+                # Retrieve precomputed average sentiment for each term
+                sentiment_scores[year] = {term: precomputed_sentiments.get(term, np.nan) for term in document_terms}
 
+    print(f"TF-IDF extraction completed in {time.time() - start_time} seconds")
     return pd.DataFrame(tfidf_scores), sentiment_scores
 
 def split_and_clean(text):
@@ -96,6 +116,8 @@ def display_basic_stats():
 
 
 def plot_frequency_over_time(term, category):
+    start_time = time.time()
+    
     yearly_data = data[data[category].str.contains(term, regex=False, na=False)]
     yearly_counts = yearly_data.groupby(yearly_data['year']).size()
     total_counts = data.groupby('year').size()
@@ -105,7 +127,6 @@ def plot_frequency_over_time(term, category):
     fig = px.bar(yearly_frequencies, labels={'value': '% of Entries', 'year': 'Year'},
                  title=f'Frequency of "{term}" Over Time in {category}')
     st.plotly_chart(fig, use_container_width=True)
-
 
 unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
 unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
@@ -134,7 +155,7 @@ with st.sidebar:
         help="Choose 'AND' to display entries that meet all criteria or 'OR' for entries that meet any of the selected criteria."
     )
 
-
+@st.cache_data
 def filter_data(people, organizations, locations, miscellaneous, logic_type):
     conditions = []
     
@@ -166,6 +187,7 @@ filtered_data = filter_data(selected_people, selected_organizations, selected_lo
 
 
 def assign_colors_dynamically(sentiment_scores, overall_sentiment):
+    start_time = time.time()
     # Convert sentiment scores to a list and remove any NaN values
     sentiments = np.array(list(sentiment_scores.values()))
     sentiments = sentiments[~np.isnan(sentiments)]
@@ -186,12 +208,15 @@ def assign_colors_dynamically(sentiment_scores, overall_sentiment):
     return colors
 
 def display_tfidf_scores(filtered_data, overall_data):
-    tfidf_data = load_tfidf_data(tfidf_label)
+    print("Displaying TF-IDF scores...")
+    start_time = time.time()
+    
+    _tfidf_data = load_tfidf_data(tfidf_label)
     
     # Compute overall sentiment
     overall_sentiment = overall_data.groupby('year')['a_sentiment'].mean().to_dict()
     
-    tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
+    tfidf_df, sentiment_scores = extract_relevant_tfidf(_tfidf_data, filtered_data, overall_sentiment)
     
     if not tfidf_df.empty():
         formatted_df = pd.DataFrame()
@@ -221,8 +246,8 @@ def display_tfidf_scores(filtered_data, overall_data):
             st.write("All years resulted in empty data after processing.")
     else:
         st.write("No relevant TF-IDF scores found for the selected query.")
-
-
+        
+    print(f"TF-IDF score display completed in {time.time() - start_time} seconds")
 
 
 def display_top_entities(filtered_data):
@@ -259,6 +284,9 @@ def display_top_entities(filtered_data):
 
 
 def plot_combined_timeline(filtered_data, overall_data):
+    print("Plotting combined timeline...")
+    start_time = time.time()
+    
     timeline_data = filtered_data.groupby("year").size().reset_index(name="Counts")
 
     sentiment_by_location = (
@@ -315,6 +343,8 @@ def plot_combined_timeline(filtered_data, overall_data):
     fig.update_yaxes(title_text="Average Sentiment Score", secondary_y=True)
 
     st.plotly_chart(fig, use_container_width=False)
+    
+    print(f"Timeline plotting completed in {time.time() - start_time} seconds")
 
 # CSS for button styling
 st.markdown(
@@ -355,38 +385,38 @@ formatted_options = [f"{value}%" for value in available_max_df_values]
 if "button_clicked" not in st.session_state:
     st.session_state.button_clicked = False
 
+# Hard-coded max_df value (20%)
+max_df_value = 20  # Always use 20% for max_df
+
 # Button to uncover key terms
 if st.button("🔍 Uncover Key Terms in China's MFA Statements"):
     st.session_state.button_clicked = True  # Set the state to indicate the button was clicked
 
 # Only run the analysis if the button has been clicked
 if st.session_state.button_clicked:
-    # Initial analysis with a default setting if it hasn't been set yet
-    if "tfidf_setting" not in st.session_state:
-        st.session_state.tfidf_setting = available_max_df_values[2]  # Default to 20%
+    print("Running TF-IDF analysis...")
+    start_time = time.time()
+    
+    # No need to set default TF-IDF threshold since it's always 20%
 
-    # Show the slider with more intuitive labeling
-    tfidf_choice = st.select_slider(
-        "Select the threshold for including common terms (higher percentage = more terms included):",
-        options=formatted_options,
-        value=f"{st.session_state.tfidf_setting}%"  # Display the session state value as a percentage
-    )
-
-    # Update the session state to store the selected integer value
-    st.session_state.tfidf_setting = int(tfidf_choice.rstrip('%'))
-
-    # Perform the analysis based on the current tfidf_setting
-    tfidf_data = load_tfidf_data(st.session_state.tfidf_setting)
+    # Perform the analysis with the fixed 20% max_df setting
+    print("Loading TF-IDF data...")
+    tfidf_data = load_tfidf_data(max_df_value)
 
     # Filter the data based on user selections
+    print("Filtering data based on user selections...")
     filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
 
     # Compute overall sentiment and extract relevant TF-IDF scores
+    print("Computing overall sentiment and extracting TF-IDF scores...")
     overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()
-    tfidf_df, sentiment_scores = extract_relevant_tfidf(tfidf_data, filtered_data, overall_sentiment)
+    
+    # Call extract_relevant_tfidf with the fixed max_df value
+    tfidf_df, sentiment_scores = extract_relevant_tfidf(_tfidf_data=tfidf_data, filtered_data=filtered_data)
 
     # Display the results
     if not tfidf_df.empty:
+        print("TF-IDF data found, formatting results...")
         formatted_df = pd.DataFrame()
 
         for year in tfidf_df.columns:
@@ -409,6 +439,7 @@ if st.session_state.button_clicked:
         formatted_df = formatted_df.dropna(how='all', axis=1)
 
         if not formatted_df.empty:
+            print("Displaying formatted TF-IDF results...")
             st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
             
             # Display the help text below the DataFrame
@@ -422,6 +453,11 @@ if st.session_state.button_clicked:
                 done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), which highlights 
                 terms that are especially relevant in the context of your query.
 
+                **Note:** Only terms that appear in 20% or fewer of all responses provided by the MFA are considered. 
+                This filter helps to avoid overly generic terms, such as "China," that are less useful for identifying 
+                key themes specific to your query.
+
+
                 **Color Coding**:
                 
                 - **Green**: Sentiment is in the top 25th percentile (more positive than the overall average).
@@ -430,9 +466,13 @@ if st.session_state.button_clicked:
                 """
             )
         else:
+            print("No relevant terms found for the selected query.")
             st.write("No relevant terms found for the selected query.")
     else:
+        print("No relevant TF-IDF scores found for the selected query.")
         st.write("No relevant terms found for the selected query.")
+        
+    print(f"TF-IDF analysis and display completed in {time.time() - start_time} seconds")
 
 # CSS for adding spacing between elements
 st.markdown(
