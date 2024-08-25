@@ -7,7 +7,7 @@ from scipy.sparse import load_npz
 import pickle
 import time
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", initial_sidebar_state="expanded")
 
 @st.cache_data
 def load_data():
@@ -361,6 +361,15 @@ with st.sidebar:
     )
     
     analyze_button = st.button("Analyze")
+    
+    st.markdown(
+        """
+        <div style="height: 30px;"></div>
+
+        How to cite: *Urosevic, A. (2024), Interactive China MFA Dashboard, Austrian Institute for European and Security Policy. Available at: https://www.aies.at/china-dashboard*
+        """,
+        unsafe_allow_html=True
+    )
 
 filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
 print(f"Filtered data contains {len(filtered_data)} rows.")
