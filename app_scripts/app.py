@@ -58,10 +58,53 @@ def load_tfidf_data(tfidf_label):
     #print(f"TF-IDF data loaded in {time.time() - start_time} seconds")
     return _tfidf_data
 
+@st.cache_data
+def load_entities_tfidf():
+    base_path = os.path.dirname(__file__)
+    print(f"Attempting to load the following TF-IDF files:")
+    file_paths = {
+        "loc": os.path.join(base_path, '../data/tfidf_a_loc.pkl'),
+        "org": os.path.join(base_path, '../data/tfidf_a_org.pkl'),
+        "per": os.path.join(base_path, '../data/tfidf_a_per.pkl'),
+        "misc": os.path.join(base_path, '../data/tfidf_a_misc.pkl'),
+    }
+
+    for key, path in file_paths.items():
+        print(f"{key}: {path}")
+
+    entities_tfidf = {}
+    for key, path in file_paths.items():
+        with open(path, 'rb') as file:
+            entities_tfidf[key] = pickle.load(file)
+            print(f"Loaded {key}: {len(entities_tfidf[key])} items")
+   
+    print("TF-IDF data for locations:", entities_tfidf['loc'])
+    print("TF-IDF data for organizations:", entities_tfidf['org'])
+    print("TF-IDF data for people:", entities_tfidf['per'])
+    print("TF-IDF data for miscellaneous:", entities_tfidf['misc'])
+    
+    return entities_tfidf
+
 def split_and_clean(text):
     return [
         t.strip() for t in text.split(";") if t.strip() and t.strip().lower() != "nan"
     ]
+
+def convert_sparse_matrix_to_dict(tfidf_data):
+    """Convert sparse matrix to a dictionary with terms as keys and tfidf scores as values."""
+    matrix = tfidf_data['matrix']
+    feature_names = tfidf_data['feature_names']
+    
+    term_tfidf_dict = {}
+    
+    # Iterate over each feature (term)
+    for i, term in enumerate(feature_names):
+        # Extract the column (i.e., tfidf scores for that term across all documents)
+        col = matrix[:, i].toarray().flatten()
+        # Sum tfidf scores for this term across all documents
+        term_tfidf_dict[term] = col.sum()
+    
+    return term_tfidf_dict
 
 unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
 unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
@@ -151,8 +194,40 @@ def extract_relevant_tfidf(_tfidf_data, filtered_data):
     #print(f"TF-IDF extraction completed in {time.time() - start_time} seconds")
     return pd.DataFrame(tfidf_scores), sentiment_scores
 
-def display_top_entities(filtered_data):
+def normalize_term(term):
+    """Normalize a term by lowercasing and stripping whitespace."""
+    if isinstance(term, str):
+        return term.lower().strip()
+    return term
+
+def get_top_tfidf_terms(tfidf_data, filtered_data, column_name):
+    # Normalize and extract terms in the filtered data
+    terms_in_filtered_data = filtered_data[column_name].dropna().apply(split_and_clean).explode().tolist()
+    terms_in_filtered_data = [normalize_term(term) for term in terms_in_filtered_data]
+
+    tfidf_scores = {}
+    feature_names = [normalize_term(term) for term in tfidf_data['feature_names']]
+
+    for term in terms_in_filtered_data:
+        if term in feature_names:
+            index = feature_names.index(term)
+            # Sum the TF-IDF scores across all documents that mention the term
+            tfidf_scores[term] = tfidf_data['matrix'][:, index][filtered_data.index].sum()
+
+    sorted_items = sorted(tfidf_scores.items(), key=lambda item: item[1], reverse=True)
+    top_terms = [term for term, score in sorted_items[:10]]
+    
+    return top_terms
+
+def display_top_entities_tfidf(filtered_data):
     col1, col2, col3, col4 = st.columns(4)
+
+    # Only proceed if there is valid filtered data
+    if filtered_data is None or filtered_data.empty:
+        st.write("No data available for the selected criteria.")
+        return
+
+    entities_tfidf = load_entities_tfidf()  # Load all entities TF-IDF data
 
     all_criteria = []
     if selected_locations:
@@ -168,28 +243,24 @@ def display_top_entities(filtered_data):
     category_title = f"associated with '{combined_criteria}'" if all_criteria else "associated with selected criteria"
 
     with col1:
-        st.subheader(f"Locations {category_title}")
-        locations_df = filtered_data['a_loc'].apply(split_and_clean).explode().value_counts().sort_values(ascending=False).reset_index()
-        locations_df.columns = ["Locations", "Count"]
-        st.dataframe(locations_df)
+        top_locations = get_top_tfidf_terms(entities_tfidf['loc'], filtered_data, 'a_loc')
+        locations_df = pd.DataFrame(top_locations, columns=["Location"])
+        st.table(locations_df.style.hide(axis="index"))
 
     with col2:
-        st.subheader(f"Organizations {category_title}")
-        organizations_df = filtered_data['a_org'].dropna().apply(split_and_clean).explode().value_counts().sort_values(ascending=False).reset_index()
-        organizations_df.columns = ["Organizations", "Count"]
-        st.dataframe(organizations_df)
+        top_organizations = get_top_tfidf_terms(entities_tfidf['org'], filtered_data, 'a_org')
+        organizations_df = pd.DataFrame(top_organizations, columns=["Organization"])
+        st.table(organizations_df.style.hide(axis="index"))
 
     with col3:
-        st.subheader(f"People {category_title}")
-        people_df = filtered_data['a_per'].dropna().apply(split_and_clean).explode().value_counts().sort_values(ascending=False).reset_index()
-        people_df.columns = ["People", "Count"]
-        st.dataframe(people_df)
+        top_people = get_top_tfidf_terms(entities_tfidf['per'], filtered_data, 'a_per')
+        people_df = pd.DataFrame(top_people, columns=["Person"])
+        st.table(people_df.style.hide(axis="index"))
 
     with col4:
-        st.subheader(f"Other Keywords {category_title}")
-        miscellaneous_df = filtered_data['a_misc'].dropna().apply(split_and_clean).explode().value_counts().sort_values(ascending=False).reset_index()
-        miscellaneous_df.columns = ["Miscellaneous", "Count"]
-        st.dataframe(miscellaneous_df)
+        top_misc = get_top_tfidf_terms(entities_tfidf['misc'], filtered_data, 'a_misc')
+        misc_df = pd.DataFrame(top_misc, columns=["Keyword"])
+        st.table(misc_df.style.hide(axis="index"))
         
 def display_basic_stats():
     messages = []
@@ -292,6 +363,7 @@ with st.sidebar:
     analyze_button = st.button("Analyze")
 
 filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
+print(f"Filtered data contains {len(filtered_data)} rows.")
 
 def plot_combined_timeline(filtered_data, overall_data):
     #print("Plotting combined timeline...")
@@ -486,25 +558,27 @@ if st.session_state.filtered_data is not None:
             else:
                 st.write("No relevant terms found for the selected query.")
 
-    # Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query
-    with st.expander("Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
-        display_top_entities(st.session_state.filtered_data)
-    
-        # CSS for adding spacing between elements
-        st.markdown(
-            """
-            <style>
-            .spacer {
-                margin-top: 20px;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
+# Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query
+if st.session_state.filtered_data is not None:
+    with st.expander("🕸️ Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
+        display_top_entities_tfidf(st.session_state.filtered_data)
+            
+# CSS for adding spacing between elements
+st.markdown(
+    """
+    <style>
+    .spacer {
+        margin-top: 20px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-    # Add a spacer between buttons and the next section
-    st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
+# Add a spacer between buttons and the next section
+st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
+if st.session_state.display_qa_pairs:
     # Add an arrow and text to guide users to scroll down
     st.markdown(
         """
