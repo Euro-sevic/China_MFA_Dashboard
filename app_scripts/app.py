@@ -508,69 +508,70 @@ if st.session_state.filtered_data is not None:
         plot_combined_timeline(st.session_state.filtered_data, data)
         display_basic_stats()
 
-    # Uncover key terms in China's MFA statements
-    if st.session_state.tfidf_df is not None:
-        with st.expander("🔍 Uncover Key Terms in China's MFA Statements", expanded=False):
-            tfidf_df = st.session_state.tfidf_df
-            sentiment_scores = st.session_state.sentiment_scores
-
-            # Display the results
-            if not tfidf_df.empty:
-                formatted_df = pd.DataFrame()
-
-                for year in tfidf_df.columns:
-                    top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
-                    if not top_terms.empty:
-                        max_score = top_terms.iloc[0]
-                        year_sentiment_scores = sentiment_scores[year]
-
-                        # Dynamically assign colors based on sentiment distribution
-                        colors = assign_colors_dynamically(year_sentiment_scores, st.session_state.overall_sentiment[year])
-
-                        formatted_terms = []
-                        for term, score in top_terms.items():
-                            color = colors.get(term, 'white')  # Default to white if not found
-                            formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
-                            formatted_terms.append(formatted_term)
-
-                        formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
-
-                formatted_df = formatted_df.dropna(how='all', axis=1)
-
-                if not formatted_df.empty:
-                    st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
-
-                    # Display the help text below the DataFrame
-                    st.markdown(
-                        """
-                        #### Explanation of the Key Term Results above:
-                        
-                        This section identifies the most significant terms in the Chinese Ministry of Foreign Affairs' 
-                        responses for the selected criteria. These terms are not just frequent; they are unusually common 
-                        in the selected responses compared to all other responses from China in that year. This ranking is 
-                        done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), which highlights 
-                        terms that are especially relevant in the context of your query.
-
-                        **Note:** Only terms that appear in 20% or fewer of all responses provided by the MFA are considered. 
-                        This filter helps to avoid overly generic terms, such as "China," that are less useful for identifying 
-                        key themes specific to your query.
-
-                        **Color Coding**:
-                        
-                        - **Green**: Sentiment is in the top 25th percentile (more positive than the overall average).
-                        - **Red**: Sentiment is in the bottom 25th percentile (less positive than the overall average).
-                        - **Neutral (White)**: Sentiment falls within the middle 50th percentile, close to the overall average.
-                        """
-                    )
-                else:
-                    st.write("No relevant terms found for the selected query.")
-            else:
-                st.write("No relevant terms found for the selected query.")
-
 # Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query
 if st.session_state.filtered_data is not None:
     with st.expander("🕸️ Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
         display_top_entities_tfidf(st.session_state.filtered_data)
+
+# Uncover key terms in China's MFA statements
+if st.session_state.tfidf_df is not None:
+    with st.expander("🔍 Uncover Key Terms in China's MFA Statements", expanded=False):
+        tfidf_df = st.session_state.tfidf_df
+        sentiment_scores = st.session_state.sentiment_scores
+
+        # Display the results
+        if not tfidf_df.empty:
+            formatted_df = pd.DataFrame()
+
+            for year in tfidf_df.columns:
+                top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
+                if not top_terms.empty:
+                    max_score = top_terms.iloc[0]
+                    year_sentiment_scores = sentiment_scores[year]
+
+                    # Dynamically assign colors based on sentiment distribution
+                    colors = assign_colors_dynamically(year_sentiment_scores, st.session_state.overall_sentiment[year])
+
+                    formatted_terms = []
+                    for term, score in top_terms.items():
+                        color = colors.get(term, 'white')  # Default to white if not found
+                        formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
+                        formatted_terms.append(formatted_term)
+
+                    formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+
+            formatted_df = formatted_df.dropna(how='all', axis=1)
+
+            if not formatted_df.empty:
+                st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
+
+                # Display the help text below the DataFrame
+                st.markdown(
+                    """
+                    #### Explanation of the Key Term Results above:
+                    
+                    This section identifies the most significant terms in the Chinese Ministry of Foreign Affairs' 
+                    responses for the selected criteria. These terms are not just frequent; they are unusually common 
+                    in the selected responses compared to all other responses from China in that year. This ranking is 
+                    done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), which highlights 
+                    terms that are especially relevant in the context of your query.
+
+                    **Note:** Only terms that appear in 20% or fewer of all responses provided by the MFA are considered. 
+                    This filter helps to avoid overly generic terms, such as "China," that are less useful for identifying 
+                    key themes specific to your query.
+
+                    **Color Coding**:
+                    
+                    - **Green**: Sentiment is in the top 25th percentile (more positive than the overall average).
+                    - **Red**: Sentiment is in the bottom 25th percentile (less positive than the overall average).
+                    - **Neutral (White)**: Sentiment falls within the middle 50th percentile, close to the overall average.
+                    """
+                )
+            else:
+                st.write("No relevant terms found for the selected query.")
+        else:
+            st.write("No relevant terms found for the selected query.")
+            
             
 # CSS for adding spacing between elements
 st.markdown(
