@@ -7,7 +7,11 @@ from scipy.sparse import load_npz
 import pickle
 import time
 
-st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    layout="wide", 
+    initial_sidebar_state="expanded",
+    page_title="China MFA Dashboard"
+)
 
 @st.cache_data
 def load_data():
