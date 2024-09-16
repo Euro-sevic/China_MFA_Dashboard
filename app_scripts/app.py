@@ -325,7 +325,7 @@ with st.sidebar:
         """
     This AIES interactive dashboard lets you explore a corpus of the press conferences by the Chinese Ministry of Foreign Affairs. The dataset is a unique source of information covering 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
     
-    A big thank you to Richard Turcsányi for his input! Data source: https://doi.org/10.1007/s11366-022-09836-w
+    A big thank you to Richard Turcsányi for his input! Data source: https://doi.org/10.1007/s11366-021-09762-3
     """
     )
 
