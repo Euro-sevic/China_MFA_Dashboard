@@ -6,11 +6,13 @@ import os
 from scipy.sparse import load_npz
 import pickle
 import time
+from collections import Counter
 
 st.set_page_config(
-    layout="wide", 
+    layout="wide",
     initial_sidebar_state="expanded",
-    page_title="China MFA Dashboard"
+    page_title="China MFA Dashboard",
+    page_icon="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTwHrb5on9YN6Abs7KvAuvz5M4dxTJLDfMT7w&s",
 )
 
 @st.cache_data
@@ -110,37 +112,33 @@ def convert_sparse_matrix_to_dict(tfidf_data):
     
     return term_tfidf_dict
 
-unique_people = sorted(set(item for sublist in data['a_per'].dropna().apply(split_and_clean).tolist() for item in sublist))
-unique_organizations = sorted(set(item for sublist in data['a_org'].dropna().apply(split_and_clean).tolist() for item in sublist))
-unique_locations = sorted(set(item for sublist in data['a_loc'].dropna().apply(split_and_clean).tolist() for item in sublist))
-unique_miscellaneous = sorted(set(item for sublist in data['a_misc'].dropna().apply(split_and_clean).tolist() for item in sublist))
+# Compute term frequencies across all categories
+term_frequencies = Counter()
+term_original_forms = {}
+
+for column in ['a_per', 'a_org', 'a_loc', 'a_misc']:
+    terms = data[column].dropna().apply(split_and_clean).tolist()
+    for sublist in terms:
+        for term in sublist:
+            term_lower = term.lower()
+            term_frequencies[term_lower] += 1
+            term_original_forms[term_lower] = term  # Keep original capitalization
+
+# Create a combined list of all search values sorted by frequency
+all_search_values = [term_original_forms[term] for term, freq in term_frequencies.most_common()]
 
 @st.cache_data
-def filter_data(people, organizations, locations, miscellaneous, logic_type):
-    conditions = []
-    
-    def build_condition(selected_items, column):
-        if not selected_items:
-            return None
-        if logic_type == 'AND':
-            return data[column].apply(lambda x: all(item in split_and_clean(x) for item in selected_items) if pd.notna(x) else False)
-        else:
-            return data[column].apply(lambda x: any(item in split_and_clean(x) for item in selected_items) if pd.notna(x) else False)
-
-    people_condition = build_condition(people, 'a_per')
-    organizations_condition = build_condition(organizations, 'a_org')
-    locations_condition = build_condition(locations, 'a_loc')
-    miscellaneous_condition = build_condition(miscellaneous, 'a_misc')
-    
-    valid_conditions = [cond for cond in [people_condition, organizations_condition, locations_condition, miscellaneous_condition] if cond is not None]
-    
-    if not valid_conditions:
+def filter_data(selected_terms, logic_type):
+    if not selected_terms:
         return data
-    
+
+    def term_in_any_column(row, term):
+        return any(term in split_and_clean(row[col]) if pd.notna(row[col]) else False for col in ['a_per', 'a_org', 'a_loc', 'a_misc'])
+
     if logic_type == 'AND':
-        return data[np.logical_and.reduce(valid_conditions)]
+        return data[data.apply(lambda row: all(term_in_any_column(row, term) for term in selected_terms), axis=1)]
     else:
-        return data[np.logical_or.reduce(valid_conditions)]
+        return data[data.apply(lambda row: any(term_in_any_column(row, term) for term in selected_terms), axis=1)]
 
 if 'filtered_data' not in st.session_state:
     st.session_state.filtered_data = None
@@ -169,7 +167,7 @@ def assign_colors_dynamically(sentiment_scores, overall_sentiment):
         elif score > q75:
             colors[term] = 'green'
         else:
-            colors[term] = 'white'
+            colors[term] = 'grey'
     
     return colors
 
@@ -234,17 +232,8 @@ def display_top_entities_tfidf(filtered_data):
     entities_tfidf = load_entities_tfidf()  # Load all entities TF-IDF data
 
     all_criteria = []
-    if selected_locations:
-        all_criteria.append(", ".join(selected_locations))
-    if selected_organizations:
-        all_criteria.append(", ".join(selected_organizations))
-    if selected_people:
-        all_criteria.append(", ".join(selected_people))
-    if selected_miscellaneous:
-        all_criteria.append(", ".join(selected_miscellaneous))
-    combined_criteria = ", ".join(all_criteria)
-
-    category_title = f"associated with '{combined_criteria}'" if all_criteria else "associated with selected criteria"
+    combined_criteria = ", ".join(selected_terms) if selected_terms else "selected criteria"
+    category_title = f"associated with '{combined_criteria}'"
 
     with col1:
         top_locations = get_top_tfidf_terms(entities_tfidf['loc'], filtered_data, 'a_loc')
@@ -268,34 +257,26 @@ def display_top_entities_tfidf(filtered_data):
         
 def display_basic_stats():
     messages = []
-    for category, terms in zip(
-        ["a_per", "a_loc", "a_org", "a_misc"],
-        [
-            selected_people,
-            selected_locations,
-            selected_organizations,
-            selected_miscellaneous,
-        ],
-    ):
-        for term in terms:
-            processed_term = term.lower()  # lowercase so as to match dictionary keys
-            category_stats = precomputed_stats.get(category, {})  # getting the category dictionary
-            term_stats = category_stats.get(processed_term)  # getting stats for the term
-
+    for term in selected_terms:
+        processed_term = term.lower()
+        found = False
+        for category in ['a_per', 'a_loc', 'a_org', 'a_misc']:
+            category_stats = precomputed_stats.get(category, {})
+            term_stats = category_stats.get(processed_term)
             if term_stats:
-                rank = term_stats['rank']  # Access the rank
-                
-                # Define a more readable category name
+                rank = term_stats['rank']
                 category_name = {
                     "a_per": "People mentioned by the Chinese MFA",
                     "a_loc": "Locations mentioned by the Chinese MFA",
                     "a_org": "Organizations mentioned by the Chinese MFA",
                     "a_misc": "Miscellaneous terms mentioned by the Chinese MFA"
-                }.get(category, category)
-
-                # Format the message
+                }[category]
                 message = f"🌟 {term.capitalize()} is the #{rank} most common value in {category_name}. 🌟"
                 messages.append(message)
+                found = True
+                break
+        if not found:
+            pass  # Term not found in any category
 
     # Display all the messages below the timeline plot
     if messages:
@@ -316,7 +297,17 @@ def plot_frequency_over_time(term, category):
 
 def display_qa_pairs(year_data):
     st.write("Question and Answer Pairs with Sentiment Score")
-    st.dataframe(year_data[['question', 'answer', 'a_sentiment']], key="qa_pairs")
+    columns_to_display = ['date', 'question', 'q_sentiment', 'answer', 'a_sentiment', 'a_loc', 'a_per', 'a_org', 'a_misc']
+    column_rename_mapping = {
+        'q_sentiment': 'Question Sentiment',
+        'a_sentiment': 'Answer Sentiment',
+        'a_loc': 'Answer Locations',
+        'a_per': 'Answer Persons',
+        'a_org': 'Answer Organizations',
+        'a_misc': 'Answer Other Keywords',
+    }
+    display_df = year_data[columns_to_display].rename(columns=column_rename_mapping)
+    st.dataframe(display_df, key="qa_pairs")
     
 with st.sidebar:
     st.image("https://www.aies.at/img/layout/AIES-Logo-EN-white.png?m=1684934843", use_column_width=True)
@@ -330,13 +321,11 @@ with st.sidebar:
     )
 
     st.title("Select Search Criteria")
-    selected_locations = st.multiselect("Select Locations:", unique_locations, key='select_locations')
-    selected_organizations = st.multiselect("Select Organizations:", unique_organizations, key='select_organizations')
-    selected_people = st.multiselect("Select People:", unique_people, key='select_people')
-    selected_miscellaneous = st.multiselect("Select other Keywords:", unique_miscellaneous, key='select_miscellaneous')
+    selected_terms = st.multiselect("Select Search Criteria:", all_search_values, key='select_terms')
     logic_type = st.radio(
         "Select Logic Type:",
         ('AND', 'OR'),
+        index=1,
         help="Choose 'AND' to display entries that meet all criteria or 'OR' for entries that meet any of the selected criteria."
     )
     
@@ -375,8 +364,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-filtered_data = filter_data(selected_people, selected_organizations, selected_locations, selected_miscellaneous, logic_type)
-print(f"Filtered data contains {len(filtered_data)} rows.")
+filtered_data = filter_data(selected_terms, logic_type)
 
 def plot_combined_timeline(filtered_data, overall_data):
     #print("Plotting combined timeline...")
@@ -486,10 +474,7 @@ def display_tfidf_scores(filtered_data, overall_data):
 if analyze_button:
     # Filter the data based on user selections and store in session state
     st.session_state.filtered_data = filter_data(
-        selected_people, 
-        selected_organizations, 
-        selected_locations, 
-        selected_miscellaneous, 
+        selected_terms, 
         logic_type
     )
     st.session_state.display_qa_pairs = True  # Trigger the QA pairs display logic
