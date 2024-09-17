@@ -7,6 +7,12 @@ from scipy.sparse import load_npz
 import pickle
 import time
 from collections import Counter
+import calendar
+import networkx as nx
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import pygraphviz
+from networkx.drawing.nx_agraph import graphviz_layout
 
 st.set_page_config(
     layout="wide",
@@ -30,10 +36,21 @@ def load_data():
     # loading only necessary columns
     df = pd.read_excel(file_path, usecols=columns_to_load)
     
+    # Convert 'date' column to datetime, replacing invalid entries with NaT
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
+    # Drop rows with NaT values in the 'date' column
+    df = df.dropna(subset=['date'])
+    
+    # Ensure 'year', 'month', and 'day' columns are correct
+    df['year'] = df['date'].dt.year
+    df['month'] = df['date'].dt.month
+    df['day'] = df['date'].dt.day
+    
     columns_to_clean = ["a_per", "a_loc", "a_org", "a_misc"]
     for column in columns_to_clean:
         df[column] = df[column].replace("-", np.nan).astype(str)
-    
+        
     return df
 
 data = load_data()
@@ -49,25 +66,20 @@ precomputed_stats = load_precomputed_stats()
 
 # Functions to load TF-IDF components
 @st.cache_data
-def load_tfidf_data(tfidf_label):
+def load_tfidf_data(tfidf_label, group_by):
     """
-    Load the TF-IDF data from the specified pickle file based on user-selected max_df setting.
+    Load the TF-IDF data from the specified pickle file based on max_df setting and group_by (year or month).
     """
-    #print(f"Loading TF-IDF data for max_df={tfidf_label}...")
-    #start_time = time.time()
-    
     base_path = os.path.dirname(__file__)
-    # adjusting filename based on slider input by user (corresponds to the file suffix)
-    file_path = os.path.join(base_path, '..', 'data', f'yearly_tfidf_maxdf{tfidf_label}.pkl')
+    file_path = os.path.join(base_path, '..', 'data', f'{group_by}_tfidf_maxdf{tfidf_label}.pkl')
     with open(file_path, 'rb') as file:
         _tfidf_data = pickle.load(file)
-    #print(f"TF-IDF data loaded in {time.time() - start_time} seconds")
+    _tfidf_data = {str(k): v for k, v in _tfidf_data.items()}
     return _tfidf_data
 
 @st.cache_data
 def load_entities_tfidf():
     base_path = os.path.dirname(__file__)
-    print(f"Attempting to load the following TF-IDF files:")
     file_paths = {
         "loc": os.path.join(base_path, '../data/tfidf_a_loc.pkl'),
         "org": os.path.join(base_path, '../data/tfidf_a_org.pkl'),
@@ -75,23 +87,19 @@ def load_entities_tfidf():
         "misc": os.path.join(base_path, '../data/tfidf_a_misc.pkl'),
     }
 
-    for key, path in file_paths.items():
-        print(f"{key}: {path}")
+    #for key, path in file_paths.items():
+        #print(f"{key}: {path}")
 
     entities_tfidf = {}
     for key, path in file_paths.items():
         with open(path, 'rb') as file:
             entities_tfidf[key] = pickle.load(file)
-            print(f"Loaded {key}: {len(entities_tfidf[key])} items")
-   
-    print("TF-IDF data for locations:", entities_tfidf['loc'])
-    print("TF-IDF data for organizations:", entities_tfidf['org'])
-    print("TF-IDF data for people:", entities_tfidf['per'])
-    print("TF-IDF data for miscellaneous:", entities_tfidf['misc'])
-    
+            
     return entities_tfidf
 
 def split_and_clean(text):
+    if pd.isna(text):
+        return []
     return [
         t.strip() for t in text.split(";") if t.strip() and t.strip().lower() != "nan"
     ]
@@ -171,29 +179,27 @@ def assign_colors_dynamically(sentiment_scores, overall_sentiment):
     
     return colors
 
-def extract_relevant_tfidf(_tfidf_data, filtered_data):
-    #print("Extracting relevant TF-IDF scores...")
-    #start_time = time.time()
+def extract_relevant_tfidf(_tfidf_data, filtered_data, group_by):
+    grouped_documents = filtered_data.groupby(group_by)['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
+    # Convert keys to strings
+    grouped_documents = {str(k): v for k, v in grouped_documents.items()}
+    #print(f"Grouped documents keys: {list(grouped_documents.keys())[:5]}")
+    #print(f"TF-IDF data keys: {list(_tfidf_data.keys())[:5]}")
+    tfidf_scores = {str(group): {} for group in _tfidf_data.keys()}
+    sentiment_scores = {str(group): {} for group in _tfidf_data.keys()}
 
-    yearly_documents = filtered_data.groupby('year')['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
-    tfidf_scores = {year: {} for year in _tfidf_data.keys()}
-    sentiment_scores = {year: {} for year in _tfidf_data.keys()}
-
-    for year, document in yearly_documents.items():
-        if year in _tfidf_data:
-            matrix, feature_names, precomputed_sentiments = _tfidf_data[year]
+    for group, document in grouped_documents.items():
+        group_str = str(group)
+        if group_str in _tfidf_data:
+            matrix, feature_names, precomputed_sentiments = _tfidf_data[group_str]
             feature_names_list = list(feature_names)
             document_terms = document.split()
             term_indices = [feature_names_list.index(term) for term in document_terms if term in feature_names_list]
             if term_indices:
                 relevant_matrix = matrix[:, term_indices]
                 summed_scores = np.array(relevant_matrix.sum(axis=0)).flatten()
-                tfidf_scores[year] = dict(zip([feature_names_list[i] for i in term_indices], summed_scores))
-                
-                #retrieving precomputed average sentiment for each term
-                sentiment_scores[year] = {term: precomputed_sentiments.get(term, np.nan) for term in document_terms}
-
-    #print(f"TF-IDF extraction completed in {time.time() - start_time} seconds")
+                tfidf_scores[group_str] = dict(zip([feature_names_list[i] for i in term_indices], summed_scores))
+                sentiment_scores[group_str] = {term: precomputed_sentiments.get(term, np.nan) for term in document_terms}
     return pd.DataFrame(tfidf_scores), sentiment_scores
 
 def normalize_term(term):
@@ -216,13 +222,13 @@ def get_top_tfidf_terms(tfidf_data, filtered_data, column_name):
             # Sum the TF-IDF scores across all documents that mention the term
             tfidf_scores[term] = tfidf_data['matrix'][:, index][filtered_data.index].sum()
 
+    # Sort and get top 10 terms and their scores
     sorted_items = sorted(tfidf_scores.items(), key=lambda item: item[1], reverse=True)
-    top_terms = [term for term, score in sorted_items[:10]]
+    top_terms = sorted_items[:10]  # List of (term, score)
     
     return top_terms
 
 def display_top_entities_tfidf(filtered_data):
-    col1, col2, col3, col4 = st.columns(4)
 
     # Only proceed if there is valid filtered data
     if filtered_data is None or filtered_data.empty:
@@ -231,29 +237,139 @@ def display_top_entities_tfidf(filtered_data):
 
     entities_tfidf = load_entities_tfidf()  # Load all entities TF-IDF data
 
-    all_criteria = []
-    combined_criteria = ", ".join(selected_terms) if selected_terms else "selected criteria"
-    category_title = f"associated with '{combined_criteria}'"
+    # Prepare dictionaries to store top entities and their scores
+    top_entities = {}
+    categories = ['loc', 'org', 'per', 'misc']
+    category_names = {'loc': 'Location', 'org': 'Organization', 'per': 'Person', 'misc': 'Keyword'}
+    category_colors = {'loc': 'red', 'org': 'blue', 'per': 'green', 'misc': 'yellow'}
 
-    with col1:
-        top_locations = get_top_tfidf_terms(entities_tfidf['loc'], filtered_data, 'a_loc')
-        locations_df = pd.DataFrame(top_locations, columns=["Location"])
-        st.table(locations_df.style.hide(axis="index"))
+    # For each category, get top terms and their scores
+    for cat in categories:
+        top_terms_scores = get_top_tfidf_terms(entities_tfidf[cat], filtered_data, f'a_{cat}')
+        top_entities[cat] = top_terms_scores  # List of (term, score)
 
-    with col2:
-        top_organizations = get_top_tfidf_terms(entities_tfidf['org'], filtered_data, 'a_org')
-        organizations_df = pd.DataFrame(top_organizations, columns=["Organization"])
-        st.table(organizations_df.style.hide(axis="index"))
+    # Build the node list
+    nodes = []
+    node_sizes = []
+    node_colors = []
+    node_texts = []
+    node_categories = {}
+    term_set = set()
+    for cat in categories:
+        for term, score in top_entities[cat]:
+            term_normalized = term.lower().strip()
+            nodes.append(term_normalized)
+            node_sizes.append(score)
+            node_colors.append(category_colors[cat])
+            node_texts.append(f"{term} ({category_names[cat]})")
+            node_categories[term] = cat
+            term_set.add(term_normalized)
+    
+    # Build the graph with weighted edges
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+    
+    # Initialize edge weights
+    for idx, row in filtered_data.iterrows():
+        entities_in_row = []
+        for cat in categories:
+            col_name = f'a_{cat}'
+            if pd.notna(row[col_name]):
+                entities = split_and_clean(row[col_name])
+                entities = [e.lower().strip() for e in entities]
+                # Filter to include only top entities
+                entities = [e for e in entities if e in term_set]
+                entities_in_row.extend(entities)
+        # Add edges between all pairs of entities in this row
+        for i in range(len(entities_in_row)):
+            for j in range(i+1, len(entities_in_row)):
+                e1 = entities_in_row[i]
+                e2 = entities_in_row[j]
+                if G.has_edge(e1, e2):
+                    G[e1][e2]['weight'] += 1
+                else:
+                    G.add_edge(e1, e2, weight=1)
+                    
+    
+    # Normalize edge weights for layout algorithms
+    weights = [d['weight'] for u, v, d in G.edges(data=True)]
+    max_weight = max(weights) if weights else 1
+    for u, v, d in G.edges(data=True):
+        d['weight'] = d['weight'] / max_weight
 
-    with col3:
-        top_people = get_top_tfidf_terms(entities_tfidf['per'], filtered_data, 'a_per')
-        people_df = pd.DataFrame(top_people, columns=["Person"])
-        st.table(people_df.style.hide(axis="index"))
+    # Compute the layout using 'graphviz_layout_neato'
+    try:
+        pos = graphviz_layout(G, prog='neato')
+    except Exception as e:
+        st.error(f"Error with Graphviz layout 'neato': {e}")
+        st.warning("Falling back to spring layout.")
+        pos = nx.spring_layout(G, weight='weight', seed=42)
 
-    with col4:
-        top_misc = get_top_tfidf_terms(entities_tfidf['misc'], filtered_data, 'a_misc')
-        misc_df = pd.DataFrame(top_misc, columns=["Keyword"])
-        st.table(misc_df.style.hide(axis="index"))
+    
+    # Store positions in node attributes for easy access
+    for node in G.nodes():
+        G.nodes[node]['pos'] = pos[node]
+
+    # Prepare edge traces
+    edge_x = []
+    edge_y = []
+    edge_counter = 0
+    for u, v, d in G.edges(data=True):
+        x0, y0 = G.nodes[u]['pos']
+        x1, y1 = G.nodes[v]['pos']
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        edge_counter += 1
+
+    
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        line=dict(width=1.5, color='gray'),
+        hoverinfo='none',
+        mode='lines'
+    )
+
+    # Prepare node traces
+    node_x = []
+    node_y = []
+    for node in G.nodes():
+        x, y = G.nodes[node]['pos']
+        node_x.append(x)
+        node_y.append(y)
+
+    # Normalize node sizes for visualization
+    max_size = max(node_sizes) if node_sizes else 1
+    node_sizes_normalized = [ (s / max_size) * 50 + 10 for s in node_sizes ]  # Scale sizes between 10 and 60
+
+    # Create node trace
+    node_trace = go.Scatter(
+        x=node_x,
+        y=node_y,
+        mode='markers',
+        hoverinfo='text',
+        text=node_texts,
+        marker=dict(
+            size=node_sizes_normalized,
+            color=node_colors,
+            line_width=2,
+        )
+    )
+
+    # Create figure and add both edge and node traces
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title='Key Associations Network',
+                        titlefont_size=16,
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20, l=5, r=5, t=40),
+                        annotations=[],
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                   )
+
+    st.plotly_chart(fig, use_container_width=True)
+    
         
 def display_basic_stats():
     messages = []
@@ -329,6 +445,14 @@ with st.sidebar:
         help="Choose 'AND' to display entries that meet all criteria or 'OR' for entries that meet any of the selected criteria."
     )
     
+    # Add a toggle to select the time granularity
+    time_granularity = st.radio(
+        "Select Time Granularity:",
+        ('Yearly', 'Monthly'),
+        index=0,
+        help="Choose 'Yearly' to view data aggregated by year or 'Monthly' for data aggregated by month."
+    )
+    
     # CSS for button styling
     st.markdown(
         """
@@ -366,70 +490,102 @@ with st.sidebar:
 
 filtered_data = filter_data(selected_terms, logic_type)
 
-def plot_combined_timeline(filtered_data, overall_data):
-    #print("Plotting combined timeline...")
-    #start_time = time.time()
+ggroup_by = 'year' if time_granularity == 'Yearly' else 'month'
+def plot_combined_timeline(filtered_data, overall_data, group_by):
+    if group_by == 'month':
+        filtered_data['month'] = pd.to_datetime(filtered_data['date']).dt.to_period('M')
+        overall_data['month'] = pd.to_datetime(overall_data['date']).dt.to_period('M')
+        
+        timeline_data = filtered_data.groupby('month').size().reset_index(name="Counts")
+        sentiment_by_location = filtered_data.groupby('month')["a_sentiment"].mean().reset_index()
+        overall_sentiment = overall_data.groupby('month')["a_sentiment"].mean().reset_index()
+        
+        # Convert month periods to datetime for proper plotting
+        timeline_data['month'] = timeline_data['month'].dt.to_timestamp()
+        sentiment_by_location['month'] = sentiment_by_location['month'].dt.to_timestamp()
+        overall_sentiment['month'] = overall_sentiment['month'].dt.to_timestamp()
+        
+        # Sort the dataframes by date
+        timeline_data = timeline_data.sort_values('month')
+        sentiment_by_location = sentiment_by_location.sort_values('month')
+        overall_sentiment = overall_sentiment.sort_values('month')
+        
+        # Create month labels (e.g., 'Jan '21')
+        month_labels = [date.strftime('%b \'%y') for date in timeline_data['month']]
+        
+        # Now, create tickvals and ticktext for every 6th month
+        tick_indices = list(range(0, len(month_labels), 6))
+        tickvals = [timeline_data['month'].iloc[i] for i in tick_indices]
+        ticktext = [month_labels[i] for i in tick_indices]
+        
+        x_values = timeline_data['month']
+    else:
+        # Yearly data
+        timeline_data = filtered_data.groupby('year').size().reset_index(name="Counts")
+        sentiment_by_location = filtered_data.groupby('year')["a_sentiment"].mean().reset_index()
+        overall_sentiment = overall_data.groupby('year')["a_sentiment"].mean().reset_index()
+        
+        # Ensure group labels are strings for consistency
+        x_values = timeline_data['year'].astype(str)
+        sentiment_by_location['year'] = sentiment_by_location['year'].astype(str)
+        overall_sentiment['year'] = overall_sentiment['year'].astype(str)
+        month_labels = x_values
+        tickvals = x_values
+        ticktext = x_values
+
+    # Prepare the x-axis title based on group_by
+    x_axis_title = "Year" if group_by == "year" else "Month"
     
-    timeline_data = filtered_data.groupby("year").size().reset_index(name="Counts")
-
-    sentiment_by_location = (
-        filtered_data.groupby("year")["a_sentiment"].mean().reset_index()
-    )
-    overall_sentiment = overall_data.groupby("year")["a_sentiment"].mean().reset_index()
-
     from plotly.subplots import make_subplots
     import plotly.graph_objs as go
-
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-
     fig.add_trace(
-        go.Bar(x=timeline_data["year"], y=timeline_data["Counts"], name="Entry Counts"),
+        go.Bar(x=x_values, y=timeline_data["Counts"], name="Entry Counts"),
         secondary_y=False,
     )
-
     fig.add_trace(
         go.Scatter(
-            x=sentiment_by_location["year"],
+            x=x_values,
             y=sentiment_by_location["a_sentiment"],
             name="Sentiment for Query",
             mode="lines+markers",
         ),
         secondary_y=True,
     )
-
     fig.add_trace(
         go.Scatter(
-            x=overall_sentiment["year"],
+            x=x_values,
             y=overall_sentiment["a_sentiment"],
             name="Overall Average Sentiment",
             mode="lines+markers",
         ),
         secondary_y=True,
     )
-
     fig.update_layout(
-        xaxis_title="Year",
+        xaxis_title=x_axis_title,
         yaxis_title="Counts",
         yaxis2_title="Average Sentiment",
         width=1200,
         height=600,
         legend=dict(
-            orientation="h",  # Horizontal orientation
-            yanchor="top",  # Anchor the legend at the top
-            y=-0.2,  # Position it slightly below the plot
-            xanchor="center",  # Center the legend horizontally
-            x=0.5  # Position it at the center of the plot
+            orientation="h",
+            yanchor="top",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        ),
+        xaxis=dict(
+            tickmode='array',
+            tickvals=tickvals,
+            ticktext=ticktext,
+            tickangle=45,
         )
     )
-
     fig.update_yaxes(title_text="Entry Count", secondary_y=False)
     fig.update_yaxes(title_text="Average Sentiment Score", secondary_y=True)
-
     st.plotly_chart(fig, use_container_width=False)
-    
-    #print(f"Timeline plotting completed in {time.time() - start_time} seconds")
 
-def display_tfidf_scores(filtered_data, overall_data):
+def display_tfidf_scores(filtered_data, overall_data, group_by):
     #print("Displaying TF-IDF scores...")
     #start_time = time.time()
     
@@ -443,22 +599,18 @@ def display_tfidf_scores(filtered_data, overall_data):
     if not tfidf_df.empty:
         formatted_df = pd.DataFrame()
 
-        for year in tfidf_df.columns:
-            top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
+        for group in tfidf_df.columns:
+            top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
             if not top_terms.empty:
                 max_score = top_terms.iloc[0]
-                year_sentiment_scores = sentiment_scores[year]
-
-                # Dynamically assign colors
-                colors = assign_colors_dynamically(year_sentiment_scores, overall_sentiment[year])
-
+                group_sentiment_scores = sentiment_scores[group]
+                colors = assign_colors_dynamically(group_sentiment_scores, st.session_state.overall_sentiment[group])
                 formatted_terms = []
                 for term, score in top_terms.items():
-                    color = colors.get(term, 'white')  # Default to white if not found
+                    color = colors.get(term, 'white')
                     formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
                     formatted_terms.append(formatted_term)
-
-                formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+                formatted_df[group] = pd.Series(formatted_terms).reset_index(drop=True)
 
         formatted_df = formatted_df.dropna(how='all', axis=1)
 
@@ -472,29 +624,47 @@ def display_tfidf_scores(filtered_data, overall_data):
     #print(f"TF-IDF score display completed in {time.time() - start_time} seconds")
 
 if analyze_button:
-    # Filter the data based on user selections and store in session state
-    st.session_state.filtered_data = filter_data(
-        selected_terms, 
-        logic_type
-    )
-    st.session_state.display_qa_pairs = True  # Trigger the QA pairs display logic
+    st.session_state.filtered_data = filter_data(selected_terms, logic_type)
+    #print(f"Filtered data has {len(st.session_state.filtered_data)} rows.")
 
-    # Load TF-IDF data
-    max_df_value = 20  # Hard-coded max_df value (20%)
-    tfidf_data = load_tfidf_data(max_df_value)
+    # Proceed only if filtered_data is not empty
+    if st.session_state.filtered_data.empty:
+        st.error("No data available after filtering with the selected criteria.")
+        st.session_state.display_qa_pairs = False
+    else:
+        st.session_state.display_qa_pairs = True
+        max_df_value = 20  # Hard-coded max_df value (20%)
+        group_by = 'year' if time_granularity == 'Yearly' else 'month'
 
-    # Compute overall sentiment and extract relevant TF-IDF scores
-    st.session_state.overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()  # Store in session state
-    st.session_state.tfidf_df, st.session_state.sentiment_scores = extract_relevant_tfidf(
-        _tfidf_data=tfidf_data, 
-        filtered_data=st.session_state.filtered_data
-    )
+        # Ensure 'month' is correctly formatted
+        if group_by == 'month':
+            data['month'] = data['date'].dt.strftime('%Y-%m')
+            st.session_state.filtered_data['month'] = st.session_state.filtered_data['date'].dt.strftime('%Y-%m')
+            #print(f"Data 'month' column sample: {data['month'].head()}")
+            #print(f"Filtered data 'month' column sample: {st.session_state.filtered_data['month'].head()}")
+        else:
+            data['year'] = data['year'].astype(str)
+            st.session_state.filtered_data['year'] = st.session_state.filtered_data['year'].astype(str)
 
+        tfidf_data = load_tfidf_data(max_df_value, group_by)
+        #print(f"TF-IDF data keys: {list(tfidf_data.keys())[:5]}")  # Print first 5 keys
+        
+        st.session_state.overall_sentiment = data.groupby(group_by)['a_sentiment'].mean().to_dict()
+        # Convert keys to strings
+        st.session_state.overall_sentiment = {str(k): v for k, v in st.session_state.overall_sentiment.items()}
+
+        st.session_state.tfidf_df, st.session_state.sentiment_scores = extract_relevant_tfidf(
+            _tfidf_data=tfidf_data,
+            filtered_data=st.session_state.filtered_data,
+            group_by=group_by
+        )
+
+group_by = 'year' if time_granularity == 'Yearly' else 'month'
 
 # Render timeline of mentions and sentiment over time if filtered data is available
 if st.session_state.filtered_data is not None:
     with st.expander("📈 View Timeline of Mentions and Sentiment Over Time", expanded=True):
-        plot_combined_timeline(st.session_state.filtered_data, data)
+        plot_combined_timeline(st.session_state.filtered_data, data, group_by)
         display_basic_stats()
 
 # Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query
@@ -502,9 +672,26 @@ if st.session_state.filtered_data is not None:
     with st.expander("🕸️ Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
         display_top_entities_tfidf(st.session_state.filtered_data)
 
+        st.markdown("""
+            **What does this network represent?**
+
+            - **Nodes**: Each node represents a key term or entity (e.g., locations, organizations, people, keywords) that is frequently associated with your selected query.
+              - **Color**: Represents the category of the entity:
+                - **Red**: Location
+                - **Blue**: Organization
+                - **Green**: Person
+                - **Yellow**: Keyword
+              - **Size**: Indicates the importance or frequency of the term in the context of your query. Larger nodes are more significant.
+            - **Edges**: The lines connecting nodes represent associations between terms. An edge between two nodes means that the terms frequently appear together in the same context.
+              - **Thickness**: Represents the strength of the association. Thicker edges indicate stronger associations.
+            - **Layout**: The placement of nodes is determined by the 'neato' algorithm, which positions closely related nodes nearer to each other. This helps to visualize clusters of related terms.
+
+            This network helps you understand how different key terms are interconnected in the Chinese MFA's statements regarding your query.
+        """)
+
 # Uncover key terms in China's MFA statements
 if st.session_state.tfidf_df is not None:
-    with st.expander("🔍 Uncover Key Terms in China's MFA Statements", expanded=False):
+    with st.expander("🔍 Uncover Key Terms in China's MFA Statements (only for yearly analysis)", expanded=False):
         tfidf_df = st.session_state.tfidf_df
         sentiment_scores = st.session_state.sentiment_scores
 
@@ -512,22 +699,23 @@ if st.session_state.tfidf_df is not None:
         if not tfidf_df.empty:
             formatted_df = pd.DataFrame()
 
-            for year in tfidf_df.columns:
-                top_terms = tfidf_df[year].dropna().sort_values(ascending=False).head(10)
+            for group in tfidf_df.columns:
+                group = str(group)  # Ensure group is a string
+                top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
                 if not top_terms.empty:
                     max_score = top_terms.iloc[0]
-                    year_sentiment_scores = sentiment_scores[year]
+                    group_sentiment_scores = sentiment_scores[group]
 
                     # Dynamically assign colors based on sentiment distribution
-                    colors = assign_colors_dynamically(year_sentiment_scores, st.session_state.overall_sentiment[year])
+                    colors = assign_colors_dynamically(group_sentiment_scores, st.session_state.overall_sentiment[group])
 
                     formatted_terms = []
                     for term, score in top_terms.items():
-                        color = colors.get(term, 'white')  # Default to white if not found
+                        color = colors.get(term, 'white')
                         formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
                         formatted_terms.append(formatted_term)
 
-                    formatted_df[year] = pd.Series(formatted_terms).reset_index(drop=True)
+                    formatted_df[group] = pd.Series(formatted_terms).reset_index(drop=True)
 
             formatted_df = formatted_df.dropna(how='all', axis=1)
 
@@ -588,16 +776,44 @@ if st.session_state.display_qa_pairs:
         unsafe_allow_html=True
     )
 
+data['date'] = pd.to_datetime(data['date'], errors='coerce')
+
 if st.session_state.display_qa_pairs:
-    selected_year = st.select_slider(
-        "Select a Year:", 
-        options=sorted(st.session_state.filtered_data["year"].unique()), 
-        key="year_slider"
-    )
-
-    year_data = st.session_state.filtered_data[st.session_state.filtered_data["year"] == selected_year]
-
-    if not year_data.empty:
-        display_qa_pairs(year_data)
+    if time_granularity == 'Yearly':
+        min_year = int(st.session_state.filtered_data["year"].min())
+        max_year = int(st.session_state.filtered_data["year"].max())
+        selected_range = st.slider(
+            "Select Year Range:",
+            min_value=min_year,
+            max_value=max_year,
+            value=(min_year, max_year),
+            key="year_slider"
+        )
+        # Filter data based on selected range
+        group_data = st.session_state.filtered_data[
+            (st.session_state.filtered_data["year"].astype(int) >= selected_range[0]) &
+            (st.session_state.filtered_data["year"].astype(int) <= selected_range[1])
+        ]
     else:
-        st.error("No question-answer pairs to display for the selected year.")
+        st.session_state.filtered_data['month'] = st.session_state.filtered_data['date'].dt.to_period('M')
+        # Convert Period to Timestamp, then to Python datetime
+        min_month = st.session_state.filtered_data["month"].min().to_timestamp().to_pydatetime()
+        max_month = st.session_state.filtered_data["month"].max().to_timestamp().to_pydatetime()
+        selected_range = st.slider(
+            "Select Month Range:",
+            min_value=min_month,
+            max_value=max_month,
+            value=(min_month, max_month),
+            format="MMM YYYY",
+            key="month_slider"
+        )
+        # Filter data based on selected range
+        group_data = st.session_state.filtered_data[
+            (st.session_state.filtered_data["date"] >= selected_range[0]) &
+            (st.session_state.filtered_data["date"] <= selected_range[1])
+        ]
+
+    if not group_data.empty:
+        display_qa_pairs(group_data)
+    else:
+        st.error("No question-answer pairs to display for the selected period.")

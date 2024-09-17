@@ -5,13 +5,19 @@ import pickle
 
 def load_data():
     """
-    Load the dataset from the 'data' directory.
+    Load the dataset from the 'data' directory and parse the date column.
     Returns:
-    DataFrame: The loaded data.
+    DataFrame: The loaded data with properly formatted date column.
     """
     file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'CMFA_PressCon_v4.xlsx')
-    df = pd.read_excel(file_path)
-    print("Columns loaded:", df.columns)  # Print columns to verify
+    df = pd.read_excel(file_path, parse_dates=['date'])
+    
+    # If date parsing fails, try manual conversion
+    if df['date'].dtype == object:
+        df['date'] = pd.to_datetime(df['date'], format='%m/%d/%Y', errors='coerce')
+    
+    print("Columns loaded:", df.columns)
+    print("Date column dtype:", df['date'].dtype)
     return df
 
 def preprocess_data(data):
@@ -25,17 +31,25 @@ def preprocess_data(data):
     else:
         raise ValueError("Column 'answer_lem' does not exist in the data.")
 
-def compute_yearly_tfidf_with_sentiment(data, max_df):
+def compute_tfidf_with_sentiment(data, max_df, group_by):
     """
-    Compute TF-IDF scores and average sentiment scores for each term per year.
-    Returns:
-    dict: A dictionary with years as keys and tuples of (TF-IDF matrix, feature names, sentiment scores) as values.
+    Compute TF-IDF scores and average sentiment scores for each term per group (year or month).
     """
     results = {}
     
-    for year in data['year'].unique():
-        yearly_data = data[data['year'] == year]
-        lem_texts = yearly_data['answer_lem'].dropna().tolist()
+    # Add 'group' column based on group_by parameter
+    if group_by == 'year':
+        data['group'] = data['year']
+    elif group_by == 'month':
+        data['group'] = data['date'].dt.to_period('M')
+    else:
+        raise ValueError("group_by must be 'year' or 'month'")
+    
+    groups = data['group'].unique()
+    
+    for group in groups:
+        group_data = data[data['group'] == group]
+        lem_texts = group_data['answer_lem'].dropna().tolist()
         
         if not lem_texts:
             continue
@@ -48,34 +62,37 @@ def compute_yearly_tfidf_with_sentiment(data, max_df):
         # Compute average sentiment for each term
         sentiment_scores = {}
         for term in feature_names:
-            term_data = yearly_data[yearly_data['answer_lem'].str.contains(term, regex=False, na=False)]
+            term_data = group_data[group_data['answer_lem'].str.contains(term, regex=False, na=False)]
             sentiment_scores[term] = term_data['a_sentiment'].mean()
 
-        results[year] = (tfidf_matrix, feature_names, sentiment_scores)
+        results[str(group)] = (tfidf_matrix, feature_names, sentiment_scores)
     
     return results
 
-def save_yearly_tfidf_with_sentiment(results, max_df):
-    """
-    Save the computed yearly TF-IDF matrices, feature names, and sentiment scores to a pickle file.
-    """
-    filename = f'yearly_tfidf_maxdf{int(max_df*100)}.pkl'
+def save_tfidf_with_sentiment(results, max_df, group_by):
+    filename = f'{group_by}_tfidf_maxdf{int(max_df*100)}.pkl'
     with open(filename, 'wb') as f:
         pickle.dump(results, f)
 
 def main():
-    """
-    Main function to orchestrate the loading, processing, computation, and saving of TF-IDF and sentiment scores.
-    """
     data = load_data()
-    data = preprocess_data(data)  # Make sure this does not convert DataFrame to Series unintentionally
-
+    data = preprocess_data(data)
     if 'year' not in data.columns:
-        raise ValueError("Year column missing after preprocessing. Check preprocessing steps.")
+        raise ValueError("Year column missing after preprocessing.")
+    
+    max_df_value = 0.2  # 20% threshold
+    for group_by in ['year', 'month']:
+        tfidf_scores = compute_tfidf_with_sentiment(data, max_df_value, group_by)
+        save_tfidf_with_sentiment(tfidf_scores, max_df_value, group_by)
 
-    for max_df_value in [0.5, 0.35, 0.2, 0.1, 0.05]:
-        yearly_tfidf_scores = compute_yearly_tfidf_with_sentiment(data, max_df_value)
-        save_yearly_tfidf_with_sentiment(yearly_tfidf_scores, max_df_value)
+    # Commented out other thresholds:
+    # for max_df_value in [0.5, 0.35, 0.2, 0.1, 0.05]:
+    #     for group_by in ['year', 'month']:
+    #         tfidf_scores = compute_tfidf_with_sentiment(data, max_df_value, group_by)
+    #         save_tfidf_with_sentiment(tfidf_scores, max_df_value, group_by)
+
+if __name__ == '__main__':
+    main()
 
 if __name__ == '__main__':
     main()
