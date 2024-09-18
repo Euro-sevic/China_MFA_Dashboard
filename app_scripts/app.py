@@ -490,7 +490,7 @@ with st.sidebar:
 
 filtered_data = filter_data(selected_terms, logic_type)
 
-ggroup_by = 'year' if time_granularity == 'Yearly' else 'month'
+group_by = 'year' if time_granularity == 'Yearly' else 'month'
 def plot_combined_timeline(filtered_data, overall_data, group_by):
     if group_by == 'month':
         filtered_data['month'] = pd.to_datetime(filtered_data['date']).dt.to_period('M')
@@ -598,7 +598,7 @@ def display_tfidf_scores(filtered_data, overall_data, group_by):
     
     if not tfidf_df.empty:
         formatted_df = pd.DataFrame()
-
+        
         for group in tfidf_df.columns:
             top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
             if not top_terms.empty:
@@ -636,27 +636,26 @@ if analyze_button:
         max_df_value = 20  # Hard-coded max_df value (20%)
         group_by = 'year' if time_granularity == 'Yearly' else 'month'
 
-        # Ensure 'month' is correctly formatted
+        data['year'] = data['date'].dt.year.astype(str)
+        st.session_state.filtered_data['year'] = st.session_state.filtered_data['date'].dt.year.astype(str)
+
         if group_by == 'month':
             data['month'] = data['date'].dt.strftime('%Y-%m')
             st.session_state.filtered_data['month'] = st.session_state.filtered_data['date'].dt.strftime('%Y-%m')
-            #print(f"Data 'month' column sample: {data['month'].head()}")
-            #print(f"Filtered data 'month' column sample: {st.session_state.filtered_data['month'].head()}")
-        else:
-            data['year'] = data['year'].astype(str)
-            st.session_state.filtered_data['year'] = st.session_state.filtered_data['year'].astype(str)
-
-        tfidf_data = load_tfidf_data(max_df_value, group_by)
+        
+        # For this section, we force group_by to 'year'
+        tfidf_group_by = 'year'
+        tfidf_data = load_tfidf_data(max_df_value, tfidf_group_by)
         #print(f"TF-IDF data keys: {list(tfidf_data.keys())[:5]}")  # Print first 5 keys
         
-        st.session_state.overall_sentiment = data.groupby(group_by)['a_sentiment'].mean().to_dict()
+        st.session_state.overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()
         # Convert keys to strings
         st.session_state.overall_sentiment = {str(k): v for k, v in st.session_state.overall_sentiment.items()}
 
         st.session_state.tfidf_df, st.session_state.sentiment_scores = extract_relevant_tfidf(
             _tfidf_data=tfidf_data,
             filtered_data=st.session_state.filtered_data,
-            group_by=group_by
+            group_by=tfidf_group_by
         )
 
 group_by = 'year' if time_granularity == 'Yearly' else 'month'
@@ -667,46 +666,63 @@ if st.session_state.filtered_data is not None:
         plot_combined_timeline(st.session_state.filtered_data, data, group_by)
         display_basic_stats()
 
-# Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query
 if st.session_state.filtered_data is not None:
     with st.expander("🕸️ Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
-        display_top_entities_tfidf(st.session_state.filtered_data)
+        
+        min_year = int(st.session_state.filtered_data["year"].min())
+        max_year = int(st.session_state.filtered_data["year"].max())
+        selected_year_range = st.slider(
+            "Select Year Range:",
+            min_value=min_year,
+            max_value=max_year,
+            value=(min_year, max_year),
+            key="network_year_slider"
+        )
+        # Filter data within the selected range
+        data_in_selected_year_range = st.session_state.filtered_data[
+            (st.session_state.filtered_data["year"].astype(int) >= selected_year_range[0]) &
+            (st.session_state.filtered_data["year"].astype(int) <= selected_year_range[1])
+        ]
 
+        # Update the network visualization
+        display_top_entities_tfidf(data_in_selected_year_range)
+
+        # Updated explanatory text
         st.markdown("""
             **What does this network represent?**
 
-            - **Nodes**: Each node represents a key term or entity (e.g., locations, organizations, people, keywords) that is frequently associated with your selected query.
+            - **Nodes**: Each node represents a key term or entity (e.g., locations, organizations, people, keywords) that is frequently associated with your selected query **within the selected time period**.
               - **Color**: Represents the category of the entity:
                 - **Red**: Location
                 - **Blue**: Organization
                 - **Green**: Person
                 - **Yellow**: Keyword
-              - **Size**: Indicates the importance or frequency of the term in the context of your query. Larger nodes are more significant.
-            - **Edges**: The lines connecting nodes represent associations between terms. An edge between two nodes means that the terms frequently appear together in the same context.
+              - **Size**: Indicates the importance or frequency of the term in the context of your query within the selected time period. Larger nodes are more significant.
+            - **Edges**: The lines connecting nodes represent associations between terms. An edge between two nodes means that the terms frequently appear together in the same context within the selected time period.
               - **Thickness**: Represents the strength of the association. Thicker edges indicate stronger associations.
             - **Layout**: The placement of nodes is determined by the 'neato' algorithm, which positions closely related nodes nearer to each other. This helps to visualize clusters of related terms.
 
-            This network helps you understand how different key terms are interconnected in the Chinese MFA's statements regarding your query.
+            Use the slider above to select a custom time period and explore how the network changes over time.
         """)
 
 # Uncover key terms in China's MFA statements
 if st.session_state.tfidf_df is not None:
-    with st.expander("🔍 Uncover Key Terms in China's MFA Statements (only for yearly analysis)", expanded=False):
+    with st.expander("🔍 Uncover Key Terms in China's MFA Statements", expanded=False):
         tfidf_df = st.session_state.tfidf_df
         sentiment_scores = st.session_state.sentiment_scores
-
+        tfidf_df.columns = tfidf_df.columns.astype(str)
+        
         # Display the results
         if not tfidf_df.empty:
             formatted_df = pd.DataFrame()
 
             for group in tfidf_df.columns:
-                group = str(group)  # Ensure group is a string
+                group = str(group) 
                 top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
                 if not top_terms.empty:
                     max_score = top_terms.iloc[0]
                     group_sentiment_scores = sentiment_scores[group]
 
-                    # Dynamically assign colors based on sentiment distribution
                     colors = assign_colors_dynamically(group_sentiment_scores, st.session_state.overall_sentiment[group])
 
                     formatted_terms = []
