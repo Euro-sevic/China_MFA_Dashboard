@@ -49,3 +49,5 @@ pydot
 matplotlib
 graphviz
 pygraphviz
+python-louvain
+streamlit-extras

@@ -13,12 +13,59 @@ import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import pygraphviz
 from networkx.drawing.nx_agraph import graphviz_layout
+import io
+import zipfile
+import networkx.algorithms.community as nx_comm
+import community.community_louvain as community_louvain
+from streamlit_extras.bottom_container import bottom
 
 st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
     page_title="China MFA Dashboard",
     page_icon="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTwHrb5on9YN6Abs7KvAuvz5M4dxTJLDfMT7w&s",
+)
+
+group_data = pd.DataFrame()
+
+# Initialize 'time_granularity' in st.session_state if not already set
+if 'time_granularity' not in st.session_state:
+    st.session_state['time_granularity'] = 'Yearly'  # Default value
+
+st.markdown(
+    f"""
+    <style>
+    .stApp {{
+        background: linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0.3)), url("https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Zhongnanhai-west-wall-3436.jpg/1600px-Zhongnanhai-west-wall-3436.jpg?20081028131702");
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    """
+    <style>
+    /* Target the bottom container using its data-testid attribute */
+    div[data-testid="stBottomBlockContainer"] {
+        background: linear-gradient(rgba(255,255,255,0.3), rgba(255,255,255,0.3)), url("https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Zhongnanhai-west-wall-3436.jpg/1600px-Zhongnanhai-west-wall-3436.jpg?20081028131702");
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+        padding-top: 0.1px !important; /* Adjust padding */
+        padding-bottom: 0.1px !important; /* Adjust padding */
+        width: 101% !important; /* Make the bottom container more narrow */
+        margin: 0 auto; /* Center it */
+        border-radius: 1px; /* Optional: Add rounded corners */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 @st.cache_data
@@ -49,7 +96,7 @@ def load_data():
     
     columns_to_clean = ["a_per", "a_loc", "a_org", "a_misc"]
     for column in columns_to_clean:
-        df[column] = df[column].replace("-", np.nan).astype(str)
+        df.loc[:, column] = df[column].replace("-", np.nan).astype(str)
         
     return df
 
@@ -87,15 +134,106 @@ def load_entities_tfidf():
         "misc": os.path.join(base_path, '../data/tfidf_a_misc.pkl'),
     }
 
-    #for key, path in file_paths.items():
-        #print(f"{key}: {path}")
-
     entities_tfidf = {}
     for key, path in file_paths.items():
         with open(path, 'rb') as file:
             entities_tfidf[key] = pickle.load(file)
             
     return entities_tfidf
+
+st.markdown(
+    """
+    <style>
+    /* Toggle Switch Styling */
+    .toggle-switch {
+        display: flex;
+        align-items: center;
+    }
+
+    .toggle-switch input[type="checkbox"] {
+        height: 0;
+        width: 0;
+        visibility: hidden;
+    }
+
+    .toggle-switch label {
+        cursor: pointer;
+        text-indent: -9999px;
+        width: 50px;
+        height: 25px;
+        background: grey;
+        display: block;
+        border-radius: 100px;
+        position: relative;
+    }
+
+    .toggle-switch label:after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 21px;
+        height: 21px;
+        background: #fff;
+        border-radius: 90px;
+        transition: 0.3s;
+    }
+
+    .toggle-switch input:checked + label {
+        background: #F29A2E;
+    }
+
+    .toggle-switch input:checked + label:after {
+        left: calc(100% - 2px);
+        transform: translateX(-100%);
+    }
+    
+    .custom-download-button > button {
+        background-color: #023059 !important; /* Custom Dark Blue */
+        color: white !important;
+        font-weight: bold !important;
+        font-size: 16px !important;
+        height: 3em !important;
+        width: 100% !important;
+        border-radius: 8px !important;
+        border: none !important;
+        box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important;
+        cursor: pointer;
+    }
+    .custom-download-button > button:hover {
+        background-color: #F29A2E !important; /* Orange on Hover */
+    }
+
+    label:active:after {
+        width: 28px;
+    }
+    
+    table.dataframe {
+        background-color: #023059 !important;
+        color: white !important;
+    }
+    table.dataframe th {
+        background-color: #023059 !important;
+        color: white !important;
+    }
+    table.dataframe td {
+        background-color: #023059 !important;
+        color: white !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+
+# Initialize 'logic_type_toggle' in st.session_state if not already set
+if 'logic_type_toggle' not in st.session_state:
+    st.session_state['logic_type_toggle'] = False  # Default to 'OR'
+
+# Initialize 'monthly_granularity_toggle' in st.session_state if not already set
+if 'monthly_granularity_toggle' not in st.session_state:
+    st.session_state['monthly_granularity_toggle'] = False  # Default to 'Yearly'
 
 def split_and_clean(text):
     if pd.isna(text):
@@ -144,12 +282,13 @@ def filter_data(selected_terms, logic_type):
         return any(term in split_and_clean(row[col]) if pd.notna(row[col]) else False for col in ['a_per', 'a_org', 'a_loc', 'a_misc'])
 
     if logic_type == 'AND':
-        return data[data.apply(lambda row: all(term_in_any_column(row, term) for term in selected_terms), axis=1)]
+        return data[data.apply(lambda row: all(term_in_any_column(row, term) for term in selected_terms), axis=1)].copy()
     else:
-        return data[data.apply(lambda row: any(term_in_any_column(row, term) for term in selected_terms), axis=1)]
+        return data[data.apply(lambda row: any(term_in_any_column(row, term) for term in selected_terms), axis=1)].copy()
+
 
 if 'filtered_data' not in st.session_state:
-    st.session_state.filtered_data = None
+    st.session_state['filtered_data'] = None
 if 'display_qa_pairs' not in st.session_state:
     st.session_state.display_qa_pairs = False
 if 'tfidf_df' not in st.session_state:
@@ -157,7 +296,11 @@ if 'tfidf_df' not in st.session_state:
 if 'sentiment_scores' not in st.session_state:
     st.session_state.sentiment_scores = None
 if 'overall_sentiment' not in st.session_state:
-    st.session_state.overall_sentiment = None  # Initialize overall_sentiment
+    st.session_state.overall_sentiment = None
+
+MAX_REPORT_ENTRIES = 5
+if 'report_data' not in st.session_state:
+    st.session_state['report_data'] = []
 
 def assign_colors_dynamically(sentiment_scores, overall_sentiment):
     #sentiment scores to a list and removing any NaN values
@@ -183,8 +326,7 @@ def extract_relevant_tfidf(_tfidf_data, filtered_data, group_by):
     grouped_documents = filtered_data.groupby(group_by)['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
     # Convert keys to strings
     grouped_documents = {str(k): v for k, v in grouped_documents.items()}
-    #print(f"Grouped documents keys: {list(grouped_documents.keys())[:5]}")
-    #print(f"TF-IDF data keys: {list(_tfidf_data.keys())[:5]}")
+    # Initialize dictionaries
     tfidf_scores = {str(group): {} for group in _tfidf_data.keys()}
     sentiment_scores = {str(group): {} for group in _tfidf_data.keys()}
 
@@ -228,11 +370,10 @@ def get_top_tfidf_terms(tfidf_data, filtered_data, column_name):
     
     return top_terms
 
-def display_top_entities_tfidf(filtered_data):
-
+def display_top_entities_tfidf(filtered_data, time_period_label):
     # Only proceed if there is valid filtered data
     if filtered_data is None or filtered_data.empty:
-        st.write("No data available for the selected criteria.")
+        st.write(f"No data available for the selected criteria in {time_period_label}.")
         return
 
     entities_tfidf = load_entities_tfidf()  # Load all entities TF-IDF data
@@ -262,13 +403,14 @@ def display_top_entities_tfidf(filtered_data):
             node_sizes.append(score)
             node_colors.append(category_colors[cat])
             node_texts.append(f"{term} ({category_names[cat]})")
-            node_categories[term] = cat
+            node_categories[term_normalized] = cat
             term_set.add(term_normalized)
-    
+
     # Build the graph with weighted edges
     G = nx.Graph()
-    G.add_nodes_from(nodes)
-    
+    for idx, node in enumerate(nodes):
+        G.add_node(node, category=node_categories[node])
+
     # Initialize edge weights
     for idx, row in filtered_data.iterrows():
         entities_in_row = []
@@ -289,15 +431,14 @@ def display_top_entities_tfidf(filtered_data):
                     G[e1][e2]['weight'] += 1
                 else:
                     G.add_edge(e1, e2, weight=1)
-                    
-    
+
     # Normalize edge weights for layout algorithms
     weights = [d['weight'] for u, v, d in G.edges(data=True)]
     max_weight = max(weights) if weights else 1
     for u, v, d in G.edges(data=True):
         d['weight'] = d['weight'] / max_weight
 
-    # Compute the layout using 'graphviz_layout_neato'
+    # Compute the layout using 'graphviz_layout' with 'neato'
     try:
         pos = graphviz_layout(G, prog='neato')
     except Exception as e:
@@ -305,7 +446,6 @@ def display_top_entities_tfidf(filtered_data):
         st.warning("Falling back to spring layout.")
         pos = nx.spring_layout(G, weight='weight', seed=42)
 
-    
     # Store positions in node attributes for easy access
     for node in G.nodes():
         G.nodes[node]['pos'] = pos[node]
@@ -313,15 +453,12 @@ def display_top_entities_tfidf(filtered_data):
     # Prepare edge traces
     edge_x = []
     edge_y = []
-    edge_counter = 0
     for u, v, d in G.edges(data=True):
         x0, y0 = G.nodes[u]['pos']
         x1, y1 = G.nodes[v]['pos']
         edge_x.extend([x0, x1, None])
         edge_y.extend([y0, y1, None])
-        edge_counter += 1
 
-    
     edge_trace = go.Scatter(
         x=edge_x, y=edge_y,
         line=dict(width=1.5, color='gray'),
@@ -339,7 +476,7 @@ def display_top_entities_tfidf(filtered_data):
 
     # Normalize node sizes for visualization
     max_size = max(node_sizes) if node_sizes else 1
-    node_sizes_normalized = [ (s / max_size) * 50 + 10 for s in node_sizes ]  # Scale sizes between 10 and 60
+    node_sizes_normalized = [(s / max_size) * 50 + 10 for s in node_sizes]  # Scale sizes between 10 and 60
 
     # Create node trace
     node_trace = go.Scatter(
@@ -355,50 +492,79 @@ def display_top_entities_tfidf(filtered_data):
         )
     )
 
+    # --- Add Network Analytics Code ---
+    # Compute degree for each node
+    degrees = dict(G.degree(weight='weight'))
+    nx.set_node_attributes(G, degrees, 'degree')
+
+    # Compute clusters using the Louvain method
+    partition = community_louvain.best_partition(G)
+    nx.set_node_attributes(G, partition, 'cluster')
+
+    # Compute modularity
+    modularity = community_louvain.modularity(partition, G)
+    # You can store modularity in st.session_state if needed
+    st.session_state['modularity'] = modularity
+
+    # Collect node data
+    node_data = []
+    for node in G.nodes(data=True):
+        node_name = node[0]
+        attrs = node[1]
+        node_data.append({
+            'node': node_name,
+            'category': node_categories.get(node_name, 'unknown'),
+            'size': attrs.get('degree', 0),
+            'cluster': attrs.get('cluster', -1),
+            'tfidf_score': next((score for term, score in top_entities.get(attrs['category'], []) if term.lower().strip() == node_name), 0),
+        })
+
+    # Collect edge data
+    edge_data = []
+    for u, v, d in G.edges(data=True):
+        edge_data.append({
+            'source': u,
+            'target': v,
+            'weight': d.get('weight', 1),
+        })
+
+    # Prepare dataframes for export
+    nodes_df = pd.DataFrame(node_data)
+    edges_df = pd.DataFrame(edge_data)
+
+    # After computing the network, store it in session state with the time period label
+    if 'network_nodes' not in st.session_state:
+        st.session_state['network_nodes'] = {}
+    if 'network_edges' not in st.session_state:
+        st.session_state['network_edges'] = {}
+
+    st.session_state['network_nodes'][time_period_label] = nodes_df
+    st.session_state['network_edges'][time_period_label] = edges_df
+
+    network_bg_color = 'rgba(255, 255, 255, 0.4)'
+
     # Create figure and add both edge and node traces
     fig = go.Figure(data=[edge_trace, node_trace],
-                    layout=go.Layout(
-                        title='Key Associations Network',
-                        titlefont_size=16,
-                        showlegend=False,
-                        hovermode='closest',
-                        margin=dict(b=20, l=5, r=5, t=40),
-                        annotations=[],
-                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
-                   )
+                layout=go.Layout(
+                    title=dict(
+                        text='Key Associations Network',
+                        font=dict(
+                            size=16,
+                            color='#023059'  # Custom dark blue
+                        )
+                    ),
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20, l=5, r=5, t=40),
+                    plot_bgcolor=network_bg_color,  
+                    paper_bgcolor=network_bg_color,  
+                    annotations=[],
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+               )
 
     st.plotly_chart(fig, use_container_width=True)
     
-        
-def display_basic_stats():
-    messages = []
-    for term in selected_terms:
-        processed_term = term.lower()
-        found = False
-        for category in ['a_per', 'a_loc', 'a_org', 'a_misc']:
-            category_stats = precomputed_stats.get(category, {})
-            term_stats = category_stats.get(processed_term)
-            if term_stats:
-                rank = term_stats['rank']
-                category_name = {
-                    "a_per": "People mentioned by the Chinese MFA",
-                    "a_loc": "Locations mentioned by the Chinese MFA",
-                    "a_org": "Organizations mentioned by the Chinese MFA",
-                    "a_misc": "Miscellaneous terms mentioned by the Chinese MFA"
-                }[category]
-                message = f"🌟 {term.capitalize()} is the #{rank} most common value in {category_name}. 🌟"
-                messages.append(message)
-                found = True
-                break
-        if not found:
-            pass  # Term not found in any category
-
-    # Display all the messages below the timeline plot
-    if messages:
-        st.markdown("#### Key Statistics")
-        for msg in messages:
-            st.markdown(msg)
 
 def plot_frequency_over_time(term, category):
     yearly_data = data[data[category].str.contains(term, regex=False, na=False)]
@@ -412,7 +578,8 @@ def plot_frequency_over_time(term, category):
     st.plotly_chart(fig, use_container_width=True)
 
 def display_qa_pairs(year_data):
-    st.write("Question and Answer Pairs with Sentiment Score")
+    st.markdown("<h3 style='color:#023059; font-weight:bold;'>Question and Answer Pairs with Sentiment Score</h3>", unsafe_allow_html=True)
+
     columns_to_display = ['date', 'question', 'q_sentiment', 'answer', 'a_sentiment', 'a_loc', 'a_per', 'a_org', 'a_misc']
     column_rename_mapping = {
         'q_sentiment': 'Question Sentiment',
@@ -423,45 +590,571 @@ def display_qa_pairs(year_data):
         'a_misc': 'Answer Other Keywords',
     }
     display_df = year_data[columns_to_display].rename(columns=column_rename_mapping)
-    st.dataframe(display_df, key="qa_pairs")
     
+    # **Apply custom styling using pandas Styler**
+    styled_df = display_df.style.set_properties(
+        **{
+            'background-color': '#023059',  # Custom Dark Blue
+            'color': 'white',
+            'border-color': 'white',
+            'font-weight': 'bold'
+        }
+    ).set_table_styles([
+        {
+            'selector': 'th',
+            'props': [('background-color', '#023059'), ('color', 'white'), ('font-weight', 'bold')]
+        },
+        {
+            'selector': 'td',
+            'props': [('background-color', '#023059'), ('color', 'white')]
+        }
+    ])
+    
+    st.dataframe(styled_df, key="qa_pairs")
+    
+    return display_df
+
+
+
+def display_main_visualization(filtered_data, overall_data, selected_terms):
+    """
+    Displays the main visualization components including search term statistics,
+    network visualization, time slider, timeline bar chart, helper text, Q&A pairs,
+    and the download button.
+
+    Parameters:
+    - filtered_data (pd.DataFrame): The data filtered based on search terms.
+    - overall_data (pd.DataFrame): The complete dataset for overall analysis.
+    - selected_terms (list): List of search terms selected by the user.
+    """
+    
+    # Display search term statistics above the main visualization
+    st.markdown("<h3 style='color:#F29A2E;'>Search Term Statistics</h3>", unsafe_allow_html=True)
+    
+    # Define maximum number of boxes per row
+    max_boxes_per_row = 5
+    
+    if selected_terms:
+        # Split selected_terms into chunks of max_boxes_per_row
+        for i in range(0, len(selected_terms), max_boxes_per_row):
+            chunk = selected_terms[i:i + max_boxes_per_row]
+            cols = st.columns(len(chunk))
+            for idx, term in enumerate(chunk):
+                with cols[idx]:
+                    processed_term = term.lower()
+                    found = False
+                    for category in ['a_per', 'a_loc', 'a_org', 'a_misc']:
+                        category_stats = precomputed_stats.get(category, {})
+                        term_stats = category_stats.get(processed_term)
+                        if term_stats:
+                            rank = term_stats['rank']
+                            category_name = {
+                                "a_per": "Person",
+                                "a_loc": "Location",
+                                "a_org": "Organization",
+                                "a_misc": "Keyword"
+                            }[category]
+                            # Build the message with adjusted font sizes and dark blue background
+                            message = f"""
+                            <div style="
+                                background-color: #023059;
+                                color: white;
+                                padding: 10px;
+                                margin-bottom: 10px;
+                                border-radius: 5px;
+                                border: 2px solid #023059;
+                                box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+                            ">
+                                <p style="font-size:14px; font-weight:bold; margin:0;">{term.capitalize()}</p>
+                                <p style="font-size:12px; font-weight:bold; margin:0;">#{rank} {category_name}</p>
+                                <p style="font-size:10px; font-weight:normal; margin:0;">most commonly mentioned by the Chinese Foreign Ministry</p>
+                            </div>
+                            """
+                            st.markdown(message, unsafe_allow_html=True)
+                            found = True
+                            break
+                    if not found:
+                        st.markdown(f"""
+                        <div style="
+                            background-color: #023059;
+                            color: white;
+                            padding: 10px;
+                            margin-bottom: 10px;
+                            border-radius: 5px;
+                            border: 2px solid #023059;
+                            box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2);
+                        ">
+                            <p style="font-size:14px; font-weight:bold; margin:0;">{term.capitalize()}</p>
+                            <p style="font-size:12px; font-weight:bold; margin:0;">No Rank Available</p>
+                            <p style="font-size:10px; font-weight:normal; margin:0;">Not found in any category</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+    
+    # st.markdown("---")  # Add a horizontal line for separation
+    
+    if filtered_data.empty:
+        st.warning("No data available for the selected criteria.")
+        return
+    
+    time_granularity = st.session_state.get('time_granularity', 'Yearly')
+    
+    time_filtered_data = pd.DataFrame()
+    time_period_label = "Undefined"
+    
+    if time_granularity == 'Yearly':
+        try:
+            min_year = int(filtered_data['year'].min())
+            max_year = int(filtered_data['year'].max())
+        except KeyError:
+            st.error("The 'year' column is missing from the filtered data.")
+            return
+        except ValueError:
+            st.error("The 'year' column contains non-integer values.")
+            return
+
+        if min_year < max_year:
+            selected_range = st.slider(
+                "x",
+                label_visibility='collapsed',
+                min_value=min_year,
+                max_value=max_year,
+                value=(min_year, max_year),
+                key="time_slider_yearly"
+            )
+            # Filter data based on selected range
+            time_filtered_data = filtered_data[
+                (filtered_data['year'] >= selected_range[0]) & (filtered_data['year'] <= selected_range[1])
+            ]
+            time_period_label = f"{selected_range[0]} to {selected_range[1]}"
+        else:
+            st.info(f"Only data for the year {min_year} is available.")
+            selected_range = (min_year, max_year)
+            time_filtered_data = filtered_data.copy()
+            time_period_label = f"{selected_range[0]}"
+    
+    else:
+        # Monthly Granularity
+        try:
+            # Ensure 'date' column exists and is datetime
+            if not pd.api.types.is_datetime64_any_dtype(filtered_data['date']):
+                filtered_data['date'] = pd.to_datetime(filtered_data['date'], errors='coerce')
+            if not pd.api.types.is_datetime64_any_dtype(overall_data['date']):
+                overall_data['date'] = pd.to_datetime(overall_data['date'], errors='coerce')
+        except KeyError:
+            st.error("The 'date' column is missing from the data.")
+            return
+
+        # Create a new column 'month_period' as datetime objects
+        filtered_data.loc[:, 'month_period'] = filtered_data['date'].dt.to_period('M').dt.to_timestamp()
+        overall_data.loc[:, 'month_period'] = overall_data['date'].dt.to_period('M').dt.to_timestamp()
+
+        min_date = filtered_data['month_period'].min()
+        max_date = filtered_data['month_period'].max()
+
+        # Convert to Python datetime objects
+        if isinstance(min_date, pd.Timestamp):
+            min_date = min_date.to_pydatetime()
+        if isinstance(max_date, pd.Timestamp):
+            max_date = max_date.to_pydatetime()
+        
+        if min_date < max_date:
+            selected_range = st.slider(
+                "x",
+                label_visibility='collapsed',
+                min_value=min_date,
+                max_value=max_date,
+                value=(min_date, max_date),
+                format="MMM YYYY",
+                key="time_slider_monthly"
+            )
+            # Filter data based on selected range
+            time_filtered_data = filtered_data[
+                (filtered_data['month_period'] >= selected_range[0]) & (filtered_data['month_period'] <= selected_range[1])
+            ]
+            time_period_label = f"{selected_range[0].strftime('%Y-%m')} to {selected_range[1].strftime('%Y-%m')}"
+        else:
+            # **Handle the case where min_date == max_date**
+            st.info(f"Only data for {min_date.strftime('%Y-%m')} is available.")
+            selected_range = (min_date, max_date)
+            time_filtered_data = filtered_data.copy()
+            time_period_label = f"{selected_range[0].strftime('%Y-%m')}"
+    
+    if 'time_filtered_data' not in locals():
+        st.error("An unexpected error occurred: 'time_filtered_data' is not defined.")
+        time_filtered_data = pd.DataFrame()  # Assign an empty DataFrame to prevent further errors
+        time_period_label = "Undefined"
+    
+    if not time_filtered_data.empty:
+        display_top_entities_tfidf(time_filtered_data, time_period_label)
+        plot_colored_timeline(time_filtered_data, overall_data, time_granularity)
+
+        col_toggle, col_spacer, col_help = st.columns([1.3, 0.1, 3.8])
+        with col_toggle:
+            def update_granularity():
+                st.session_state['time_granularity'] = 'Monthly' if st.session_state['monthly_granularity_toggle'] else 'Yearly'
+                st.session_state['granularity_changed'] = True
+
+            monthly_granularity_toggle = st.checkbox(
+                label='Use Monthly Granularity',
+                value=(time_granularity == 'Monthly'),
+                key='monthly_granularity_toggle',
+                help="Toggle to switch between monthly and yearly data aggregation. 'Monthly' provides more granular insights.",
+                on_change=update_granularity
+            )
+            
+        st.session_state['time_granularity'] = 'Monthly' if monthly_granularity_toggle else 'Yearly'
+            
+        col_spacer.markdown("")
+        col_help.markdown("<p style='color:#023059; font-size:15px; font-style: italic; font-weight: bold; margin: 0;'>Bar colors show if the Chinese MFA spoke more positively or negatively about your search terms compared to their average tone that year.</p>", unsafe_allow_html=True)
+        
+        # Display Q&A pairs across the full width
+        display_df = display_qa_pairs(time_filtered_data)
+        
+        report_entry = {
+            'selected_terms': selected_terms,
+            'logic_type': st.session_state['logic_type_toggle'] and 'AND' or 'OR',
+            'time_granularity': st.session_state['time_granularity'],
+            'date_range': selected_range,
+            'network_nodes': st.session_state['network_nodes'].get(time_period_label, pd.DataFrame()),
+            'network_edges': st.session_state['network_edges'].get(time_period_label, pd.DataFrame()),
+            'tfidf_df': st.session_state.get('tfidf_df', None),
+            'qa_pairs': display_df,
+        }
+        
+        st.session_state['report_data'].append(report_entry)
+        # **Enforce the maximum number of report entries**
+        if len(st.session_state['report_data']) > MAX_REPORT_ENTRIES:
+            st.session_state['report_data'] = st.session_state['report_data'][-MAX_REPORT_ENTRIES:]
+        
+        # Apply custom CSS styling
+        st.markdown(
+            """
+            <style>
+            /* Apply styles to all download buttons */
+            .stDownloadButton > button {
+                background-color: #023059 !important;
+                color: white !important;
+                font-weight: bold !important;
+                font-size: 12px !important;
+                height: 2em !important;
+                width: auto !important;
+                border-radius: 10px !important;
+                border: 2px solid #023059 !important;
+                box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.2) !important;
+                margin-top: 10px !important;
+            }
+            .stDownloadButton > button:hover {
+                background-color: #F29A2E !important;
+                color: white !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Generate the report content
+        report_content = generate_report_content()
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        file_name = f"AIES_China_Dashboard_{timestamp}_Report.txt"
+
+        st.markdown(
+            """
+            <style>
+            /* Apply styles to the download button */
+            .custom-download-button > button {
+                background-color: #023059 !important; /* Custom Dark Blue */
+                color: white !important;
+                font-weight: bold !important;
+                font-size: 12px !important;
+                height: 3em !important;
+                width: 100% !important;
+                border-radius: 8px !important;
+                border: none !important;
+                box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.2) !important;
+                cursor: pointer;
+            }
+            .custom-download-button > button:hover {
+                background-color: #F29A2E !important; /* Orange on Hover */
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+        with bottom():
+            st.markdown('<div class="custom-download-button">', unsafe_allow_html=True)
+            st.download_button(
+                label="Download Enriched Data & Custom Report for Chatbot Interaction",
+                data=report_content,
+                file_name=file_name,
+                mime='text/plain',
+                # help="Download the custom data report to converse with your preferred chatbot. The report includes prompts to help analyze trends and generate insights on China's foreign policy discourse.",
+                key='download_report_bottom'
+            )
+            st.markdown('</div>', unsafe_allow_html=True)
+    
+    else:
+        st.warning("No data available to display visualizations.")
+
+
+
+def plot_colored_timeline(filtered_data, overall_data, time_granularity):
+    # Ensure both DataFrames are explicit copies
+    filtered_data = filtered_data.copy()
+    overall_data = overall_data.copy()
+    
+    if time_granularity == 'Monthly':
+        # Assign to a new column 'period_monthly' as strings to avoid dtype conflicts
+        filtered_data.loc[:, 'period_monthly'] = filtered_data['date'].dt.to_period('M').astype(str)
+        overall_data.loc[:, 'period_monthly'] = overall_data['date'].dt.to_period('M').astype(str)
+        
+        # Use the new 'period_monthly' column for grouping
+        period_col = 'period_monthly'
+    else:
+        # Assign to a new column 'period_yearly' as strings for consistency
+        filtered_data.loc[:, 'period_yearly'] = filtered_data['year'].astype(str)
+        overall_data.loc[:, 'period_yearly'] = overall_data['year'].astype(str)
+        
+        # Use the new 'period_yearly' column for grouping
+        period_col = 'period_yearly'
+    
+    # Aggregate counts and sentiments
+    timeline_data = filtered_data.groupby(period_col).size().reset_index(name="Counts")
+    sentiment_data = filtered_data.groupby(period_col)['a_sentiment'].mean().reset_index(name='Sentiment')
+    overall_sentiment = overall_data.groupby(period_col)['a_sentiment'].mean().reset_index(name='Overall_Sentiment')
+    
+    # Merge dataframes
+    timeline_data = timeline_data.merge(sentiment_data, on=period_col, how='left')
+    timeline_data = timeline_data.merge(overall_sentiment, on=period_col, how='left')
+    
+    # Calculate sentiment deviation
+    timeline_data['Sentiment_Deviation'] = timeline_data['Sentiment'] - timeline_data['Overall_Sentiment']
+    
+    # Assign colors based on deviation
+    def assign_color(dev):
+        if dev <= -0.1:
+            return '#ff0000'  # Red
+        elif -0.1 < dev <= -0.05:
+            return '#ffa700'  # Orange
+        elif -0.05 < dev <= 0.05:
+            return '#fff400'  # Yellow
+        elif 0.05 < dev <= 0.1:
+            return '#a3ff00'  # Light Green
+        else:
+            return '#2cba00'  # Dark Green
+    
+    timeline_data['Color'] = timeline_data['Sentiment_Deviation'].apply(assign_color)
+    
+    timeline_bg_color = 'rgba(255, 255, 255, 0.4)'
+    
+    # Create the histogram
+    fig = go.Figure()
+    
+    fig.add_trace(go.Bar(
+        x=timeline_data[period_col],
+        y=timeline_data["Counts"],
+        marker_color=timeline_data['Color'],
+        name="Entry Counts"
+    ))
+    
+    fig.update_layout(
+        title=dict(
+            text='Mentions (and Emotions) Over Time',
+            font=dict(
+                size=18,
+                color='#023059'  # Custom dark blue
+            )
+        ),
+        xaxis_title='Period' if time_granularity == 'Monthly' else 'Year',
+        yaxis_title='Counts',
+        width=800,
+        height=300,
+        margin=dict(l=40, r=40, t=60, b=40),  # Adjust top margin if needed
+        plot_bgcolor=timeline_bg_color,  
+        paper_bgcolor=timeline_bg_color  
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+
+def generate_report_content():
+
+    content = ""
+    system_prompt = """
+    You are an expert analyst in Chinese foreign policy with a deep understanding of the role of language, narratives, and strategic communication in international relations. You have been provided with data from a dashboard that analyzes press conferences by the Chinese Ministry of Foreign Affairs (MFA), covering over two decades of diplomatic discourse.
+
+    **Your tasks are:**
+
+    1. **Examine Strategic Narratives:**
+       - Identify and interpret the key narratives employed by the Chinese MFA.
+       - Discuss how these narratives construct China's identity and interests on the international stage.
+       - Analyze how the narratives have evolved over time, particularly between different leadership eras (e.g., Hu Jintao and Xi Jinping).
+
+    2. **Analyze Entity Clusters and Relationships:**
+       - Examine how entities (locations, organizations, people, keywords) are connected and clustered in the network.
+       - Interpret why certain entities are closely linked based on historical events, geopolitical strategies, or diplomatic relations.
+       - Consider the significance of entity clusters in the context of China's foreign policy objectives.
+
+    3. **Explore Relational Contexts in Q&A Pairs:**
+       - Use the provided question-answer pairs to understand the contexts in which entities are mentioned together.
+       - Identify patterns, recurring themes, and the use of language that reflects strategic messaging.
+       - Analyze how the MFA's responses align with China's broader foreign policy narratives and strategies.
+
+    4. **Interpret TF-IDF Scores and Key Terms:**
+       - Analyze the significance of key terms with high TF-IDF scores.
+       - Explain how these terms relate to the overarching narratives and policy positions.
+       - Discuss changes in term importance over time and their correlation with major geopolitical events or shifts in policy.
+
+    5. **Analyze Changes Over Time:**
+       - Compare the entity networks across different time periods.
+       - Identify how relationships between entities have evolved.
+       - Discuss possible reasons for these changes based on historical events or shifts in policy.
+
+    6. **Provide Insights and Draw Conclusions:**
+       - Synthesize your analysis to provide meaningful insights into China's foreign policy discourse.
+       - Discuss notable patterns, shifts, or anomalies, and what they reveal about China's international relations strategies.
+       - Offer potential implications for global politics and suggest areas for further research.
+
+    **Guidelines:**
+
+    - **Support all interpretations and statements with empirical data from the provided file.** This includes statistical data, network property measures, sentiment scores, or verbatim quotes.
+    - **When directly quoting the Chinese MFA's answers, always add the exact date(s) of the quote in brackets.**
+    - **Contextualize** your analysis within the broader scope of international relations and political communication.
+    - **Reference historical events**, policy changes, or international incidents that may explain the observed patterns.
+    - **Consider the interplay** between domestic and international audiences in the MFA's messaging.
+    - **Reflect on the use of language** as a tool for constructing social reality and influencing international perceptions.
+
+    **Data:**
+    """
+
+    content += system_prompt
+
+    for idx, entry in enumerate(st.session_state['report_data'], 1):
+        content += f"\n\n# Report Entry {idx}\n"
+        content += f"## Query Parameters:\n"
+        content += f"- Selected Search Terms: {entry['selected_terms']}\n"
+        content += f"- Logic Type: {entry['logic_type']}\n"
+        content += f"- Time Granularity: {entry['time_granularity']}\n"
+        content += f"- Date Range: {entry['date_range']}\n"
+
+        # Include Network Analysis
+        content += "\n## Network Analysis:\n"
+        nodes_df = entry['network_nodes']
+        edges_df = entry['network_edges']
+
+        if not nodes_df.empty and not edges_df.empty:
+            content += f"### Nodes:\n{nodes_df.to_csv(index=False)}\n"
+            content += f"### Edges:\n{edges_df.to_csv(index=False)}\n"
+        else:
+            content += "No network data available.\n"
+
+        # Include TF-IDF Results
+        tfidf_df = entry['tfidf_df']
+        if tfidf_df is not None:
+            content += "\n## TF-IDF Results:\n"
+            for column in tfidf_df.columns:
+                if column == 'index':
+                    continue
+                content += f"\n### {column}:\n"
+                top_terms = tfidf_df[column].dropna().sort_values(ascending=False).head(10)
+                for term, score in top_terms.items():
+                    content += f"- {term}: {score}\n"
+        else:
+            content += "No TF-IDF results available.\n"
+
+        # Include Q&A Pairs
+        qa_pairs = entry['qa_pairs']
+        content += f"\n## Question-Answer Pairs:\n{qa_pairs.to_csv(index=False)}\n"
+
+    return content
+
 with st.sidebar:
-    st.image("https://www.aies.at/img/layout/AIES-Logo-EN-white.png?m=1684934843", use_column_width=True)
-    st.title("What does the official China say about...?")
+    
     st.markdown(
         """
-    This AIES interactive dashboard lets you explore a corpus of the press conferences by the Chinese Ministry of Foreign Affairs. The dataset is a unique source of information covering 20+ years of China's foreign policy discourse. Select different criteria to get insights from the data.
-    
-    A big thank you to Richard Turcsányi for his input! Data source: https://doi.org/10.1007/s11366-021-09762-3
-    """
+        <style>
+        .center-image {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px; /* Adjust this value to change the gap */
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
     )
 
-    st.title("Select Search Criteria")
-    selected_terms = st.multiselect("Select Search Criteria:", all_search_values, key='select_terms')
-    logic_type = st.radio(
-        "Select Logic Type:",
-        ('AND', 'OR'),
-        index=1,
-        help="Choose 'AND' to display entries that meet all criteria or 'OR' for entries that meet any of the selected criteria."
+    # Apply the custom class to the image
+    st.markdown(
+        '<div class="center-image"><img src="https://www.aies.at/img/layout/AIES-Logo-EN-white.png?m=1684934843" width="180"></div>',
+        unsafe_allow_html=True
     )
-    
-    # Add a toggle to select the time granularity
-    time_granularity = st.radio(
-        "Select Time Granularity:",
-        ('Yearly', 'Monthly'),
-        index=0,
-        help="Choose 'Yearly' to view data aggregated by year or 'Monthly' for data aggregated by month."
-    )
+    st.markdown(
+    """
+    <style>
+        .compact-text {
+            font-size: 0.85em;
+            line-height: 1.2;
+            margin-bottom: 0.9em;
+        }
+        .compact-text h4 {
+            margin-bottom: 0.2em;
+        }
+        .compact-text p {
+            margin-bottom: 0.3em;
+        }
+        .feature-list {
+            font-size: 1.1em;
+            padding-left: 0.5em;
+        }
+        .feature-list div {
+            margin-bottom: 0.2em;
+        }
+    </style>
+    <div class="compact-text">
+        <p>🔎 Explore China's Foreign Policy Statements</p>
+        <p>Dive into 20+ years of press conferences by the Chinese Foreign Ministry and:</p>
+        <div class="feature-list">
+            <div>🔄 <strong>search</strong> for key terms in the MFA's statements.</div>
+            <div>🕸️ <strong>visualize</strong> networks of associated entities.</div>
+            <div>📊 <strong>analyze</strong> sentiment trends and narratives.</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+    with st.form(key='search_form'):
+        selected_terms = st.multiselect("Select Search Criteria:", all_search_values, key='select_terms', help="Type in the places, topics, persons or organizations you are interested in and click 'Analyze'.")
+        submitted = st.form_submit_button("Analyze")
+        logic_type_toggle = st.toggle(
+            label='Use AND Logic',
+            value=False,  # Default is 'OR'
+            key='logic_type_toggle',
+            help="Toggle to switch between 'OR' and 'AND' logic for filtering. 'OR' shows more results: e.g., selecting 'USA' and 'China' will show statements mentioning either country. 'AND' is more restrictive: it will only show statements mentioning both countries."
+        )
+
+        # Map the toggle state to logic type
+        logic_type = 'AND' if logic_type_toggle else 'OR'
+        
+    if submitted:
+        st.session_state['filtered_data'] = filter_data(selected_terms, logic_type)
+        
     
     # CSS for button styling
     st.markdown(
         """
         <style>
+                .compact-text .attribution {
+            margin-top: 0.7em;
+            font-size: 14px;
+        }
         div.stButton > button:first-child {
             background-color: #023059; /* Dark Blue */
             color: white;
             font-weight: bold;
-            font-size: 18px;
+            font-size: 12px;
             height: 3em;
             width: 100%;
             border-radius: 10px;
@@ -476,295 +1169,65 @@ with st.sidebar:
         """,
         unsafe_allow_html=True
     )
+
+    report_content = generate_report_content()
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    file_name = f"AIES_China_Dashboard_{timestamp}_Report.txt"
+
+    report_bytes = report_content.encode('utf-8')
     
-    analyze_button = st.button("Analyze")
+    st.download_button(
+        label="Download Custom Data Analysis for LLM",
+        data=report_bytes,
+        file_name=file_name,
+        mime='text/plain',
+        )
+
     
     st.markdown(
         """
-        <div style="height: 30px;"></div>
-
-        How to cite: *Urosevic, A. (2024), Interactive China MFA Dashboard, Austrian Institute for European and Security Policy. Available at: https://www.aies.at/china-dashboard*
+        <style>
+            .compact-text {
+                font-size: 0.8em;
+                line-height: 1.2;
+            }
+            .compact-text p {
+                margin-top: 0.2em;
+                margin-bottom: 0.2em;
+            }
+            .attribution {
+                font-size: 0.75em;
+                margin-top: 0.5em;
+                margin-bottom: 0.5em;
+            }
+            .citation {
+                font-size: 1.0 em;
+                font-style: italic;
+                margin-top: 0.5em;
+            }
+        </style>
+        <div class="compact-text">
+            <p class="attribution">
+                A big thank you to <a href="https://scholar.google.com/citations?user=dvrRIhAAAAAJ&hl=en" target="_blank">Richard Turcsányi</a> for his input! Original dataset can be found <a href="https://doi.org/10.1007/s11366-021-09762-3" target="_blank">here</a>.
+            </p>
+            <div style="height: 15px;"></div>
+            <p class="citation">
+                How to cite: <a href="https://www.linkedin.com/in/adamurosevic/" target="_blank">Urosevic, A.</a> (2024), Interactive China MFA Dashboard, Austrian Institute for European and Security Policy. Available at: https://www.aies.at/china-dashboard
+            </p>
+        </div>
         """,
         unsafe_allow_html=True
     )
 
+
 filtered_data = filter_data(selected_terms, logic_type)
 
-group_by = 'year' if time_granularity == 'Yearly' else 'month'
-def plot_combined_timeline(filtered_data, overall_data, group_by):
-    if group_by == 'month':
-        filtered_data['month'] = pd.to_datetime(filtered_data['date']).dt.to_period('M')
-        overall_data['month'] = pd.to_datetime(overall_data['date']).dt.to_period('M')
-        
-        timeline_data = filtered_data.groupby('month').size().reset_index(name="Counts")
-        sentiment_by_location = filtered_data.groupby('month')["a_sentiment"].mean().reset_index()
-        overall_sentiment = overall_data.groupby('month')["a_sentiment"].mean().reset_index()
-        
-        # Convert month periods to datetime for proper plotting
-        timeline_data['month'] = timeline_data['month'].dt.to_timestamp()
-        sentiment_by_location['month'] = sentiment_by_location['month'].dt.to_timestamp()
-        overall_sentiment['month'] = overall_sentiment['month'].dt.to_timestamp()
-        
-        # Sort the dataframes by date
-        timeline_data = timeline_data.sort_values('month')
-        sentiment_by_location = sentiment_by_location.sort_values('month')
-        overall_sentiment = overall_sentiment.sort_values('month')
-        
-        # Create month labels (e.g., 'Jan '21')
-        month_labels = [date.strftime('%b \'%y') for date in timeline_data['month']]
-        
-        # Now, create tickvals and ticktext for every 6th month
-        tick_indices = list(range(0, len(month_labels), 6))
-        tickvals = [timeline_data['month'].iloc[i] for i in tick_indices]
-        ticktext = [month_labels[i] for i in tick_indices]
-        
-        x_values = timeline_data['month']
-    else:
-        # Yearly data
-        timeline_data = filtered_data.groupby('year').size().reset_index(name="Counts")
-        sentiment_by_location = filtered_data.groupby('year')["a_sentiment"].mean().reset_index()
-        overall_sentiment = overall_data.groupby('year')["a_sentiment"].mean().reset_index()
-        
-        # Ensure group labels are strings for consistency
-        x_values = timeline_data['year'].astype(str)
-        sentiment_by_location['year'] = sentiment_by_location['year'].astype(str)
-        overall_sentiment['year'] = overall_sentiment['year'].astype(str)
-        month_labels = x_values
-        tickvals = x_values
-        ticktext = x_values
+if filtered_data.empty:
+    st.warning("No data available for the selected criteria.")
 
-    # Prepare the x-axis title based on group_by
-    x_axis_title = "Year" if group_by == "year" else "Month"
-    
-    from plotly.subplots import make_subplots
-    import plotly.graph_objs as go
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_trace(
-        go.Bar(x=x_values, y=timeline_data["Counts"], name="Entry Counts"),
-        secondary_y=False,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=sentiment_by_location["a_sentiment"],
-            name="Sentiment for Query",
-            mode="lines+markers",
-        ),
-        secondary_y=True,
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=x_values,
-            y=overall_sentiment["a_sentiment"],
-            name="Overall Average Sentiment",
-            mode="lines+markers",
-        ),
-        secondary_y=True,
-    )
-    fig.update_layout(
-        xaxis_title=x_axis_title,
-        yaxis_title="Counts",
-        yaxis2_title="Average Sentiment",
-        width=1200,
-        height=600,
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.2,
-            xanchor="center",
-            x=0.5
-        ),
-        xaxis=dict(
-            tickmode='array',
-            tickvals=tickvals,
-            ticktext=ticktext,
-            tickangle=45,
-        )
-    )
-    fig.update_yaxes(title_text="Entry Count", secondary_y=False)
-    fig.update_yaxes(title_text="Average Sentiment Score", secondary_y=True)
-    st.plotly_chart(fig, use_container_width=False)
-
-def display_tfidf_scores(filtered_data, overall_data, group_by):
-    #print("Displaying TF-IDF scores...")
-    #start_time = time.time()
-    
-    _tfidf_data = load_tfidf_data(tfidf_label)
-    
-    # Compute overall sentiment
-    overall_sentiment = overall_data.groupby('year')['a_sentiment'].mean().to_dict()
-    
-    tfidf_df, sentiment_scores = extract_relevant_tfidf(_tfidf_data, filtered_data, overall_sentiment)
-    
-    if not tfidf_df.empty:
-        formatted_df = pd.DataFrame()
-        
-        for group in tfidf_df.columns:
-            top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
-            if not top_terms.empty:
-                max_score = top_terms.iloc[0]
-                group_sentiment_scores = sentiment_scores[group]
-                colors = assign_colors_dynamically(group_sentiment_scores, st.session_state.overall_sentiment[group])
-                formatted_terms = []
-                for term, score in top_terms.items():
-                    color = colors.get(term, 'white')
-                    formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
-                    formatted_terms.append(formatted_term)
-                formatted_df[group] = pd.Series(formatted_terms).reset_index(drop=True)
-
-        formatted_df = formatted_df.dropna(how='all', axis=1)
-
-        if not formatted_df.empty:
-            st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
-        else:
-            st.write("All years resulted in empty data after processing.")
-    else:
-        st.write("No relevant TF-IDF scores found for the selected query.")
-        
-    #print(f"TF-IDF score display completed in {time.time() - start_time} seconds")
-
-if analyze_button:
-    st.session_state.filtered_data = filter_data(selected_terms, logic_type)
-    #print(f"Filtered data has {len(st.session_state.filtered_data)} rows.")
-
-    # Proceed only if filtered_data is not empty
-    if st.session_state.filtered_data.empty:
-        st.error("No data available after filtering with the selected criteria.")
-        st.session_state.display_qa_pairs = False
-    else:
-        st.session_state.display_qa_pairs = True
-        max_df_value = 20  # Hard-coded max_df value (20%)
-        group_by = 'year' if time_granularity == 'Yearly' else 'month'
-
-        data['year'] = data['date'].dt.year.astype(str)
-        st.session_state.filtered_data['year'] = st.session_state.filtered_data['date'].dt.year.astype(str)
-
-        if group_by == 'month':
-            data['month'] = data['date'].dt.strftime('%Y-%m')
-            st.session_state.filtered_data['month'] = st.session_state.filtered_data['date'].dt.strftime('%Y-%m')
-        
-        # For this section, we force group_by to 'year'
-        tfidf_group_by = 'year'
-        tfidf_data = load_tfidf_data(max_df_value, tfidf_group_by)
-        #print(f"TF-IDF data keys: {list(tfidf_data.keys())[:5]}")  # Print first 5 keys
-        
-        st.session_state.overall_sentiment = data.groupby('year')['a_sentiment'].mean().to_dict()
-        # Convert keys to strings
-        st.session_state.overall_sentiment = {str(k): v for k, v in st.session_state.overall_sentiment.items()}
-
-        st.session_state.tfidf_df, st.session_state.sentiment_scores = extract_relevant_tfidf(
-            _tfidf_data=tfidf_data,
-            filtered_data=st.session_state.filtered_data,
-            group_by=tfidf_group_by
-        )
-
-group_by = 'year' if time_granularity == 'Yearly' else 'month'
-
-# Render timeline of mentions and sentiment over time if filtered data is available
-if st.session_state.filtered_data is not None:
-    with st.expander("📈 View Timeline of Mentions and Sentiment Over Time", expanded=True):
-        plot_combined_timeline(st.session_state.filtered_data, data, group_by)
-        display_basic_stats()
 
 if st.session_state.filtered_data is not None:
-    with st.expander("🕸️ Key Associations: Discover the Top Locations, Organizations, and Individuals Linked by China’s MFA to Your Query", expanded=False):
-        
-        min_year = int(st.session_state.filtered_data["year"].min())
-        max_year = int(st.session_state.filtered_data["year"].max())
-        selected_year_range = st.slider(
-            "Select Year Range:",
-            min_value=min_year,
-            max_value=max_year,
-            value=(min_year, max_year),
-            key="network_year_slider"
-        )
-        # Filter data within the selected range
-        data_in_selected_year_range = st.session_state.filtered_data[
-            (st.session_state.filtered_data["year"].astype(int) >= selected_year_range[0]) &
-            (st.session_state.filtered_data["year"].astype(int) <= selected_year_range[1])
-        ]
-
-        # Update the network visualization
-        display_top_entities_tfidf(data_in_selected_year_range)
-
-        # Updated explanatory text
-        st.markdown("""
-            **What does this network represent?**
-
-            - **Nodes**: Each node represents a key term or entity (e.g., locations, organizations, people, keywords) that is frequently associated with your selected query **within the selected time period**.
-              - **Color**: Represents the category of the entity:
-                - **Red**: Location
-                - **Blue**: Organization
-                - **Green**: Person
-                - **Yellow**: Keyword
-              - **Size**: Indicates the importance or frequency of the term in the context of your query within the selected time period. Larger nodes are more significant.
-            - **Edges**: The lines connecting nodes represent associations between terms. An edge between two nodes means that the terms frequently appear together in the same context within the selected time period.
-              - **Thickness**: Represents the strength of the association. Thicker edges indicate stronger associations.
-            - **Layout**: The placement of nodes is determined by the 'neato' algorithm, which positions closely related nodes nearer to each other. This helps to visualize clusters of related terms.
-
-            Use the slider above to select a custom time period and explore how the network changes over time.
-        """)
-
-# Uncover key terms in China's MFA statements
-if st.session_state.tfidf_df is not None:
-    with st.expander("🔍 Uncover Key Terms in China's MFA Statements", expanded=False):
-        tfidf_df = st.session_state.tfidf_df
-        sentiment_scores = st.session_state.sentiment_scores
-        tfidf_df.columns = tfidf_df.columns.astype(str)
-        
-        # Display the results
-        if not tfidf_df.empty:
-            formatted_df = pd.DataFrame()
-
-            for group in tfidf_df.columns:
-                group = str(group) 
-                top_terms = tfidf_df[group].dropna().sort_values(ascending=False).head(10)
-                if not top_terms.empty:
-                    max_score = top_terms.iloc[0]
-                    group_sentiment_scores = sentiment_scores[group]
-
-                    colors = assign_colors_dynamically(group_sentiment_scores, st.session_state.overall_sentiment[group])
-
-                    formatted_terms = []
-                    for term, score in top_terms.items():
-                        color = colors.get(term, 'white')
-                        formatted_term = f"<span style='color:{color}'>{term} ({(score/max_score * 100):.2f}%)</span>"
-                        formatted_terms.append(formatted_term)
-
-                    formatted_df[group] = pd.Series(formatted_terms).reset_index(drop=True)
-
-            formatted_df = formatted_df.dropna(how='all', axis=1)
-
-            if not formatted_df.empty:
-                st.markdown(formatted_df.to_html(escape=False), unsafe_allow_html=True)
-
-                # Display the help text below the DataFrame
-                st.markdown(
-                    """
-                    #### Explanation of the Key Term Results above:
-                    
-                    This section identifies the most significant terms in the Chinese Ministry of Foreign Affairs' 
-                    responses for the selected criteria. These terms are not just frequent; they are unusually common 
-                    in the selected responses compared to all other responses from China in that year. This ranking is 
-                    done using a technique called TF-IDF (Term Frequency-Inverse Document Frequency), which highlights 
-                    terms that are especially relevant in the context of your query.
-
-                    **Note:** Only terms that appear in 20% or fewer of all responses provided by the MFA are considered. 
-                    This filter helps to avoid overly generic terms, such as "China," that are less useful for identifying 
-                    key themes specific to your query.
-
-                    **Color Coding**:
-                    
-                    - **Green**: Sentiment is in the top 25th percentile (more positive than the overall average).
-                    - **Red**: Sentiment is in the bottom 25th percentile (less positive than the overall average).
-                    - **Neutral (White)**: Sentiment falls within the middle 50th percentile, close to the overall average.
-                    """
-                )
-            else:
-                st.write("No relevant terms found for the selected query.")
-        else:
-            st.write("No relevant terms found for the selected query.")
-            
+    display_main_visualization(st.session_state.filtered_data, data, selected_terms)            
             
 # CSS for adding spacing between elements
 st.markdown(
@@ -791,45 +1254,6 @@ if st.session_state.display_qa_pairs:
         """,
         unsafe_allow_html=True
     )
+    
 
 data['date'] = pd.to_datetime(data['date'], errors='coerce')
-
-if st.session_state.display_qa_pairs:
-    if time_granularity == 'Yearly':
-        min_year = int(st.session_state.filtered_data["year"].min())
-        max_year = int(st.session_state.filtered_data["year"].max())
-        selected_range = st.slider(
-            "Select Year Range:",
-            min_value=min_year,
-            max_value=max_year,
-            value=(min_year, max_year),
-            key="year_slider"
-        )
-        # Filter data based on selected range
-        group_data = st.session_state.filtered_data[
-            (st.session_state.filtered_data["year"].astype(int) >= selected_range[0]) &
-            (st.session_state.filtered_data["year"].astype(int) <= selected_range[1])
-        ]
-    else:
-        st.session_state.filtered_data['month'] = st.session_state.filtered_data['date'].dt.to_period('M')
-        # Convert Period to Timestamp, then to Python datetime
-        min_month = st.session_state.filtered_data["month"].min().to_timestamp().to_pydatetime()
-        max_month = st.session_state.filtered_data["month"].max().to_timestamp().to_pydatetime()
-        selected_range = st.slider(
-            "Select Month Range:",
-            min_value=min_month,
-            max_value=max_month,
-            value=(min_month, max_month),
-            format="MMM YYYY",
-            key="month_slider"
-        )
-        # Filter data based on selected range
-        group_data = st.session_state.filtered_data[
-            (st.session_state.filtered_data["date"] >= selected_range[0]) &
-            (st.session_state.filtered_data["date"] <= selected_range[1])
-        ]
-
-    if not group_data.empty:
-        display_qa_pairs(group_data)
-    else:
-        st.error("No question-answer pairs to display for the selected period.")
