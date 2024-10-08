@@ -28,7 +28,7 @@ st.set_page_config(
 
 group_data = pd.DataFrame()
 
-# Initialize 'time_granularity' in st.session_state if not already set
+# I'm initializing 'time_granularity' to 'Yearly' if it's not set yet
 if 'time_granularity' not in st.session_state:
     st.session_state['time_granularity'] = 'Yearly'  # Default value
 
@@ -83,13 +83,13 @@ def load_data():
     # loading only necessary columns
     df = pd.read_excel(file_path, usecols=columns_to_load)
     
-    # Convert 'date' column to datetime, replacing invalid entries with NaT
+    # Converting 'date' column to datetime, replacing invalid entries with NaT
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # Drop rows with NaT values in the 'date' column
+    # Dropping rows with NaT values in the 'date' column
     df = df.dropna(subset=['date'])
     
-    # Ensure 'year', 'month', and 'day' columns are correct
+    # Ensuring 'year', 'month', and 'day' columns are correct
     df['year'] = df['date'].dt.year
     df['month'] = df['date'].dt.month
     df['day'] = df['date'].dt.day
@@ -111,11 +111,11 @@ def load_precomputed_stats():
 
 precomputed_stats = load_precomputed_stats()
 
-# Functions to load TF-IDF components
 @st.cache_data
 def load_tfidf_data(tfidf_label, group_by):
     """
-    Load the TF-IDF data from the specified pickle file based on max_df setting and group_by (year or month).
+    Loading the TF-IDF data based on max_df setting and group_by (year or month).
+
     """
     base_path = os.path.dirname(__file__)
     file_path = os.path.join(base_path, '..', 'data', f'{group_by}_tfidf_maxdf{tfidf_label}.pkl')
@@ -226,12 +226,11 @@ st.markdown(
 )
 
 
-
-# Initialize 'logic_type_toggle' in st.session_state if not already set
+# Initializing 'logic_type_toggle' if not set yet
 if 'logic_type_toggle' not in st.session_state:
     st.session_state['logic_type_toggle'] = False  # Default to 'OR'
 
-# Initialize 'monthly_granularity_toggle' in st.session_state if not already set
+# Initializing 'monthly_granularity_toggle' if not set yet
 if 'monthly_granularity_toggle' not in st.session_state:
     st.session_state['monthly_granularity_toggle'] = False  # Default to 'Yearly'
 
@@ -243,22 +242,22 @@ def split_and_clean(text):
     ]
 
 def convert_sparse_matrix_to_dict(tfidf_data):
-    """Convert sparse matrix to a dictionary with terms as keys and tfidf scores as values."""
+    """Converting sparse matrix to a dictionary with terms as keys and tfidf scores as values."""
     matrix = tfidf_data['matrix']
     feature_names = tfidf_data['feature_names']
     
     term_tfidf_dict = {}
     
-    # Iterate over each feature (term)
+    # Iterating over each feature (term)
     for i, term in enumerate(feature_names):
-        # Extract the column (i.e., tfidf scores for that term across all documents)
+        # Extracting the column (i.e., tfidf scores for that term across all documents)
         col = matrix[:, i].toarray().flatten()
-        # Sum tfidf scores for this term across all documents
+        # Summing tfidf scores for this term across all documents
         term_tfidf_dict[term] = col.sum()
     
     return term_tfidf_dict
 
-# Compute term frequencies across all categories
+# Computing term frequencies across all categories
 term_frequencies = Counter()
 term_original_forms = {}
 
@@ -270,7 +269,7 @@ for column in ['a_per', 'a_org', 'a_loc', 'a_misc']:
             term_frequencies[term_lower] += 1
             term_original_forms[term_lower] = term  # Keep original capitalization
 
-# Create a combined list of all search values sorted by frequency
+# Creating a combined list of all search values sorted by frequency
 all_search_values = [term_original_forms[term] for term, freq in term_frequencies.most_common()]
 
 @st.cache_data
@@ -324,9 +323,9 @@ def assign_colors_dynamically(sentiment_scores, overall_sentiment):
 
 def extract_relevant_tfidf(_tfidf_data, filtered_data, group_by):
     grouped_documents = filtered_data.groupby(group_by)['answer_lem'].apply(lambda x: ' '.join(x.dropna())).to_dict()
-    # Convert keys to strings
+    # Converting keys to strings
     grouped_documents = {str(k): v for k, v in grouped_documents.items()}
-    # Initialize dictionaries
+    # Initializing dictionaries
     tfidf_scores = {str(group): {} for group in _tfidf_data.keys()}
     sentiment_scores = {str(group): {} for group in _tfidf_data.keys()}
 
@@ -345,13 +344,13 @@ def extract_relevant_tfidf(_tfidf_data, filtered_data, group_by):
     return pd.DataFrame(tfidf_scores), sentiment_scores
 
 def normalize_term(term):
-    """Normalize a term by lowercasing and stripping whitespace."""
+    """Normalizing a term by lowercasing and stripping whitespace."""
     if isinstance(term, str):
         return term.lower().strip()
     return term
 
 def get_top_tfidf_terms(tfidf_data, filtered_data, column_name):
-    # Normalize and extract terms in the filtered data
+    # Normalizing and extracting terms in the filtered data
     terms_in_filtered_data = filtered_data[column_name].dropna().apply(split_and_clean).explode().tolist()
     terms_in_filtered_data = [normalize_term(term) for term in terms_in_filtered_data]
 
@@ -361,35 +360,35 @@ def get_top_tfidf_terms(tfidf_data, filtered_data, column_name):
     for term in terms_in_filtered_data:
         if term in feature_names:
             index = feature_names.index(term)
-            # Sum the TF-IDF scores across all documents that mention the term
+            # Summing the TF-IDF scores across all documents that mention the term
             tfidf_scores[term] = tfidf_data['matrix'][:, index][filtered_data.index].sum()
 
-    # Sort and get top 10 terms and their scores
+    # Sorting and getting top 10 terms and their scores
     sorted_items = sorted(tfidf_scores.items(), key=lambda item: item[1], reverse=True)
     top_terms = sorted_items[:10]  # List of (term, score)
     
     return top_terms
 
 def display_top_entities_tfidf(filtered_data, time_period_label):
-    # Only proceed if there is valid filtered data
+    # Only proceeding here if there is valid filtered data
     if filtered_data is None or filtered_data.empty:
         st.write(f"No data available for the selected criteria in {time_period_label}.")
         return
 
     entities_tfidf = load_entities_tfidf()  # Load all entities TF-IDF data
 
-    # Prepare dictionaries to store top entities and their scores
+    # Preparing dictionaries to store top entities and their scores
     top_entities = {}
     categories = ['loc', 'org', 'per', 'misc']
     category_names = {'loc': 'Location', 'org': 'Organization', 'per': 'Person', 'misc': 'Keyword'}
     category_colors = {'loc': 'red', 'org': 'blue', 'per': 'green', 'misc': 'yellow'}
 
-    # For each category, get top terms and their scores
+    # For each category, im getting top terms and their scores
     for cat in categories:
         top_terms_scores = get_top_tfidf_terms(entities_tfidf[cat], filtered_data, f'a_{cat}')
         top_entities[cat] = top_terms_scores  # List of (term, score)
 
-    # Build the node list
+    # Building the node list
     nodes = []
     node_sizes = []
     node_colors = []
@@ -406,12 +405,12 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
             node_categories[term_normalized] = cat
             term_set.add(term_normalized)
 
-    # Build the graph with weighted edges
+    # Building the graph with weighted edges
     G = nx.Graph()
     for idx, node in enumerate(nodes):
         G.add_node(node, category=node_categories[node])
 
-    # Initialize edge weights
+    # Initializing edge weights
     for idx, row in filtered_data.iterrows():
         entities_in_row = []
         for cat in categories:
@@ -422,7 +421,7 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
                 # Filter to include only top entities
                 entities = [e for e in entities if e in term_set]
                 entities_in_row.extend(entities)
-        # Add edges between all pairs of entities in this row
+        # Adding edges between all pairs of entities in this row
         for i in range(len(entities_in_row)):
             for j in range(i+1, len(entities_in_row)):
                 e1 = entities_in_row[i]
@@ -432,13 +431,13 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
                 else:
                     G.add_edge(e1, e2, weight=1)
 
-    # Normalize edge weights for layout algorithms
+    # Normalizing edge weights for layout algorithms
     weights = [d['weight'] for u, v, d in G.edges(data=True)]
     max_weight = max(weights) if weights else 1
     for u, v, d in G.edges(data=True):
         d['weight'] = d['weight'] / max_weight
 
-    # Compute the layout using 'graphviz_layout' with 'neato'
+    # Computing the layout using 'graphviz_layout' with 'neato'
     try:
         pos = graphviz_layout(G, prog='neato')
     except Exception as e:
@@ -446,11 +445,11 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
         st.warning("Falling back to spring layout.")
         pos = nx.spring_layout(G, weight='weight', seed=42)
 
-    # Store positions in node attributes for easy access
+    # Storing positions in node attributes for easy access
     for node in G.nodes():
         G.nodes[node]['pos'] = pos[node]
 
-    # Prepare edge traces
+    # Preparing edge traces
     edge_x = []
     edge_y = []
     for u, v, d in G.edges(data=True):
@@ -466,7 +465,7 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
         mode='lines'
     )
 
-    # Prepare node traces
+    # Preparing node traces
     node_x = []
     node_y = []
     for node in G.nodes():
@@ -474,11 +473,11 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
         node_x.append(x)
         node_y.append(y)
 
-    # Normalize node sizes for visualization
+    # Normalizing node sizes for visualization
     max_size = max(node_sizes) if node_sizes else 1
     node_sizes_normalized = [(s / max_size) * 50 + 10 for s in node_sizes]  # Scale sizes between 10 and 60
 
-    # Create node trace
+    # Creating node trace
     node_trace = go.Scatter(
         x=node_x,
         y=node_y,
@@ -492,21 +491,19 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
         )
     )
 
-    # --- Add Network Analytics Code ---
-    # Compute degree for each node
+    # Computing degree for each node
     degrees = dict(G.degree(weight='weight'))
     nx.set_node_attributes(G, degrees, 'degree')
 
-    # Compute clusters using the Louvain method
+    # Computing clusters using the Louvain method
     partition = community_louvain.best_partition(G)
     nx.set_node_attributes(G, partition, 'cluster')
 
-    # Compute modularity
+    # Computing modularity
     modularity = community_louvain.modularity(partition, G)
-    # You can store modularity in st.session_state if needed
     st.session_state['modularity'] = modularity
 
-    # Collect node data
+    # Collecting node data
     node_data = []
     for node in G.nodes(data=True):
         node_name = node[0]
@@ -519,7 +516,7 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
             'tfidf_score': next((score for term, score in top_entities.get(attrs['category'], []) if term.lower().strip() == node_name), 0),
         })
 
-    # Collect edge data
+    # Collecting edge data
     edge_data = []
     for u, v, d in G.edges(data=True):
         edge_data.append({
@@ -528,11 +525,10 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
             'weight': d.get('weight', 1),
         })
 
-    # Prepare dataframes for export
+    # Preparing dataframes for export
     nodes_df = pd.DataFrame(node_data)
     edges_df = pd.DataFrame(edge_data)
 
-    # After computing the network, store it in session state with the time period label
     if 'network_nodes' not in st.session_state:
         st.session_state['network_nodes'] = {}
     if 'network_edges' not in st.session_state:
@@ -543,14 +539,13 @@ def display_top_entities_tfidf(filtered_data, time_period_label):
 
     network_bg_color = 'rgba(255, 255, 255, 0.4)'
 
-    # Create figure and add both edge and node traces
     fig = go.Figure(data=[edge_trace, node_trace],
                 layout=go.Layout(
                     title=dict(
                         text='Key Associations Network',
                         font=dict(
                             size=16,
-                            color='#023059'  # Custom dark blue
+                            color='#023059'
                         )
                     ),
                     showlegend=False,
@@ -591,10 +586,10 @@ def display_qa_pairs(year_data):
     }
     display_df = year_data[columns_to_display].rename(columns=column_rename_mapping)
     
-    # **Apply custom styling using pandas Styler**
+    # Applying custom styling using pandas Styler
     styled_df = display_df.style.set_properties(
         **{
-            'background-color': '#023059',  # Custom Dark Blue
+            'background-color': '#023059',  
             'color': 'white',
             'border-color': 'white',
             'font-weight': 'bold'
@@ -628,14 +623,14 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
     - selected_terms (list): List of search terms selected by the user.
     """
     
-    # Display search term statistics above the main visualization
+    # Displaying search term statistics above the main visualization
     st.markdown("<h3 style='color:#F29A2E;'>Search Term Statistics</h3>", unsafe_allow_html=True)
     
-    # Define maximum number of boxes per row
+    # Defining maximum number of boxes per row
     max_boxes_per_row = 5
     
     if selected_terms:
-        # Split selected_terms into chunks of max_boxes_per_row
+        # Splitting selected_terms into chunks of max_boxes_per_row
         for i in range(0, len(selected_terms), max_boxes_per_row):
             chunk = selected_terms[i:i + max_boxes_per_row]
             cols = st.columns(len(chunk))
@@ -654,7 +649,7 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
                                 "a_org": "Organization",
                                 "a_misc": "Keyword"
                             }[category]
-                            # Build the message with adjusted font sizes and dark blue background
+                            # Building the message with adjusted font sizes and dark blue background
                             message = f"""
                             <div style="
                                 background-color: #023059;
@@ -690,7 +685,6 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
                         </div>
                         """, unsafe_allow_html=True)
     
-    # st.markdown("---")  # Add a horizontal line for separation
     
     if filtered_data.empty:
         st.warning("No data available for the selected criteria.")
@@ -721,7 +715,7 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
                 value=(min_year, max_year),
                 key="time_slider_yearly"
             )
-            # Filter data based on selected range
+            # Filtering data based on selected range
             time_filtered_data = filtered_data[
                 (filtered_data['year'] >= selected_range[0]) & (filtered_data['year'] <= selected_range[1])
             ]
@@ -735,7 +729,6 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
     else:
         # Monthly Granularity
         try:
-            # Ensure 'date' column exists and is datetime
             if not pd.api.types.is_datetime64_any_dtype(filtered_data['date']):
                 filtered_data['date'] = pd.to_datetime(filtered_data['date'], errors='coerce')
             if not pd.api.types.is_datetime64_any_dtype(overall_data['date']):
@@ -744,14 +737,14 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
             st.error("The 'date' column is missing from the data.")
             return
 
-        # Create a new column 'month_period' as datetime objects
+        # Creating a new column 'month_period' as datetime objects
         filtered_data.loc[:, 'month_period'] = filtered_data['date'].dt.to_period('M').dt.to_timestamp()
         overall_data.loc[:, 'month_period'] = overall_data['date'].dt.to_period('M').dt.to_timestamp()
 
         min_date = filtered_data['month_period'].min()
         max_date = filtered_data['month_period'].max()
 
-        # Convert to Python datetime objects
+        # Convertiung to Python datetime objects
         if isinstance(min_date, pd.Timestamp):
             min_date = min_date.to_pydatetime()
         if isinstance(max_date, pd.Timestamp):
@@ -767,13 +760,13 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
                 format="MMM YYYY",
                 key="time_slider_monthly"
             )
-            # Filter data based on selected range
+            # Filtering data based on selected range
             time_filtered_data = filtered_data[
                 (filtered_data['month_period'] >= selected_range[0]) & (filtered_data['month_period'] <= selected_range[1])
             ]
             time_period_label = f"{selected_range[0].strftime('%Y-%m')} to {selected_range[1].strftime('%Y-%m')}"
         else:
-            # **Handle the case where min_date == max_date**
+            # Handling the case where min_date == max_date
             st.info(f"Only data for {min_date.strftime('%Y-%m')} is available.")
             selected_range = (min_date, max_date)
             time_filtered_data = filtered_data.copy()
@@ -781,7 +774,7 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
     
     if 'time_filtered_data' not in locals():
         st.error("An unexpected error occurred: 'time_filtered_data' is not defined.")
-        time_filtered_data = pd.DataFrame()  # Assign an empty DataFrame to prevent further errors
+        time_filtered_data = pd.DataFrame()  
         time_period_label = "Undefined"
     
     if not time_filtered_data.empty:
@@ -807,7 +800,7 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
         col_spacer.markdown("")
         col_help.markdown("<p style='color:#023059; font-size:15px; font-style: italic; font-weight: bold; margin: 0;'>Bar colors show if the Chinese MFA spoke more positively or negatively about your search terms compared to their average tone that year.</p>", unsafe_allow_html=True)
         
-        # Display Q&A pairs across the full width
+        # Displaying Q&A pairs across the full width
         display_df = display_qa_pairs(time_filtered_data)
         
         report_entry = {
@@ -822,11 +815,11 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
         }
         
         st.session_state['report_data'].append(report_entry)
-        # **Enforce the maximum number of report entries**
+        # Enforcing here maximum number of report entries
         if len(st.session_state['report_data']) > MAX_REPORT_ENTRIES:
             st.session_state['report_data'] = st.session_state['report_data'][-MAX_REPORT_ENTRIES:]
         
-        # Apply custom CSS styling
+        # Applying custom CSS styling
         st.markdown(
             """
             <style>
@@ -852,7 +845,7 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
             unsafe_allow_html=True
         )
 
-        # Generate the report content
+        # Generating the report content
         report_content = generate_report_content()
         timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
         file_name = f"AIES_China_Dashboard_{timestamp}_Report.txt"
@@ -900,38 +893,38 @@ def display_main_visualization(filtered_data, overall_data, selected_terms):
 
 
 def plot_colored_timeline(filtered_data, overall_data, time_granularity):
-    # Ensure both DataFrames are explicit copies
+    # Ensuring both DataFrames are explicit copies..
     filtered_data = filtered_data.copy()
     overall_data = overall_data.copy()
     
     if time_granularity == 'Monthly':
-        # Assign to a new column 'period_monthly' as strings to avoid dtype conflicts
+        # Assigning to a new column 'period_monthly' as strings to avoid dtype conflicts
         filtered_data.loc[:, 'period_monthly'] = filtered_data['date'].dt.to_period('M').astype(str)
         overall_data.loc[:, 'period_monthly'] = overall_data['date'].dt.to_period('M').astype(str)
         
-        # Use the new 'period_monthly' column for grouping
+        # Using the new 'period_monthly' column for grouping
         period_col = 'period_monthly'
     else:
-        # Assign to a new column 'period_yearly' as strings for consistency
+        # Assigning to a new column 'period_yearly' as strings for consistency
         filtered_data.loc[:, 'period_yearly'] = filtered_data['year'].astype(str)
         overall_data.loc[:, 'period_yearly'] = overall_data['year'].astype(str)
         
-        # Use the new 'period_yearly' column for grouping
+        # Using the new 'period_yearly' column for grouping
         period_col = 'period_yearly'
     
-    # Aggregate counts and sentiments
+    # Aggregating counts and sentiments
     timeline_data = filtered_data.groupby(period_col).size().reset_index(name="Counts")
     sentiment_data = filtered_data.groupby(period_col)['a_sentiment'].mean().reset_index(name='Sentiment')
     overall_sentiment = overall_data.groupby(period_col)['a_sentiment'].mean().reset_index(name='Overall_Sentiment')
     
-    # Merge dataframes
+    # Merging dataframes
     timeline_data = timeline_data.merge(sentiment_data, on=period_col, how='left')
     timeline_data = timeline_data.merge(overall_sentiment, on=period_col, how='left')
     
-    # Calculate sentiment deviation
+    # Calculating sentiment deviation
     timeline_data['Sentiment_Deviation'] = timeline_data['Sentiment'] - timeline_data['Overall_Sentiment']
     
-    # Assign colors based on deviation
+    # Assigning colors based on deviation
     def assign_color(dev):
         if dev <= -0.1:
             return '#ff0000'  # Red
@@ -948,7 +941,7 @@ def plot_colored_timeline(filtered_data, overall_data, time_granularity):
     
     timeline_bg_color = 'rgba(255, 255, 255, 0.4)'
     
-    # Create the histogram
+    # Creating the histogram
     fig = go.Figure()
     
     fig.add_trace(go.Bar(
@@ -970,7 +963,7 @@ def plot_colored_timeline(filtered_data, overall_data, time_granularity):
         yaxis_title='Counts',
         width=800,
         height=300,
-        margin=dict(l=40, r=40, t=60, b=40),  # Adjust top margin if needed
+        margin=dict(l=40, r=40, t=60, b=40),  
         plot_bgcolor=timeline_bg_color,  
         paper_bgcolor=timeline_bg_color  
     )
@@ -1038,7 +1031,7 @@ def generate_report_content():
         content += f"- Time Granularity: {entry['time_granularity']}\n"
         content += f"- Date Range: {entry['date_range']}\n"
 
-        # Include Network Analysis
+        # Including Network Analysis
         content += "\n## Network Analysis:\n"
         nodes_df = entry['network_nodes']
         edges_df = entry['network_edges']
@@ -1049,7 +1042,7 @@ def generate_report_content():
         else:
             content += "No network data available.\n"
 
-        # Include TF-IDF Results
+        # Including TF-IDF Results
         tfidf_df = entry['tfidf_df']
         if tfidf_df is not None:
             content += "\n## TF-IDF Results:\n"
@@ -1063,7 +1056,7 @@ def generate_report_content():
         else:
             content += "No TF-IDF results available.\n"
 
-        # Include Q&A Pairs
+        # Including Q&A Pairs
         qa_pairs = entry['qa_pairs']
         content += f"\n## Question-Answer Pairs:\n{qa_pairs.to_csv(index=False)}\n"
 
@@ -1085,7 +1078,7 @@ with st.sidebar:
         unsafe_allow_html=True
     )
 
-    # Apply the custom class to the image
+    # Applying the custom class to the image
     st.markdown(
         '<div class="center-image"><img src="https://www.aies.at/img/layout/AIES-Logo-EN-white.png?m=1684934843" width="180"></div>',
         unsafe_allow_html=True
@@ -1135,7 +1128,7 @@ with st.sidebar:
             help="Toggle to switch between 'OR' and 'AND' logic for filtering. 'OR' shows more results: e.g., selecting 'USA' and 'China' will show statements mentioning either country. 'AND' is more restrictive: it will only show statements mentioning both countries."
         )
 
-        # Map the toggle state to logic type
+        # Mapping the toggle state to logic type
         logic_type = 'AND' if logic_type_toggle else 'OR'
         
     if submitted:
@@ -1241,11 +1234,11 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Add a spacer between buttons and the next section
+# Adding a spacer between buttons and the next section
 st.markdown('<div class="spacer"></div>', unsafe_allow_html=True)
 
 if st.session_state.display_qa_pairs:
-    # Add an arrow and text to guide users to scroll down
+    # Adding an arrow and text to guide users to scroll down
     st.markdown(
         """
         <div style='text-align: center; margin-top: 50px;'>
